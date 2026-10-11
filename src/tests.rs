@@ -1,0 +1,134 @@
+//! Tests for the simulation core: track following, switches, ramps, saving.
+
+use crate::demo::build_demo;
+use crate::grid::*;
+use crate::models_vehicle::CarKind;
+use crate::save;
+use crate::track::*;
+use crate::trains::Trains;
+use bevy::prelude::*;
+
+fn put(grid: &mut Grid, x: i32, z: i32, kind: TrackKind, rot: u8, level: i32) {
+    grid.edit(IVec2::new(x, z)).unwrap().content = Content::Track(Track::new(kind, rot, level));
+}
+
+/// A 4 x 3 loop with corners at (10,10) and (13,12).
+fn small_loop() -> Grid {
+    let mut g = Grid::default();
+    for x in 11..13 {
+        put(&mut g, x, 10, TrackKind::Straight, 1, 0);
+        put(&mut g, x, 12, TrackKind::Straight, 1, 0);
+    }
+    put(&mut g, 10, 11, TrackKind::Straight, 0, 0);
+    put(&mut g, 13, 11, TrackKind::Straight, 0, 0);
+    put(&mut g, 10, 10, TrackKind::Curve, 0, 0);
+    put(&mut g, 13, 10, TrackKind::Curve, 1, 0);
+    put(&mut g, 13, 12, TrackKind::Curve, 2, 0);
+    put(&mut g, 10, 12, TrackKind::Curve, 3, 0);
+    g
+}
+
+#[test]
+fn train_goes_round_a_loop_and_comes_back() {
+    let g = small_loop();
+    let start = start_pos(&g, IVec2::new(11, 10)).unwrap();
+    let (p0, _) = start.world(&g);
+    // Loop length: 6 straights + 4 quarter circles of radius 0.5.
+    let len = 6.0 + 4.0 * std::f32::consts::FRAC_PI_4;
+    let mut p = start;
+    let moved = p.advance(&g, len);
+    assert!((moved - len).abs() < 1e-3, "moved {moved}");
+    assert!((p.world(&g).0 - p0).length() < 1e-3);
+    // And in reverse.
+    let mut r = start.reversed();
+    r.advance(&g, len);
+    assert!((r.world(&g).0 - p0).length() < 1e-3);
+}
+
+#[test]
+fn track_stops_at_dead_end() {
+    let mut g = Grid::default();
+    put(&mut g, 5, 5, TrackKind::Straight, 1, 0);
+    put(&mut g, 6, 5, TrackKind::Straight, 1, 0);
+    let mut p = start_pos(&g, IVec2::new(5, 5)).unwrap();
+    let moved = p.advance(&g, 10.0);
+    assert!(moved < 2.0 && moved > 0.4, "moved {moved}");
+}
+
+#[test]
+fn switch_routes_follow_its_setting() {
+    let mut g = Grid::default();
+    // Switch at (5,5): stem W, straight E, branch N (SwitchLeft rot 1).
+    put(&mut g, 4, 5, TrackKind::Straight, 1, 0);
+    put(&mut g, 5, 5, TrackKind::SwitchLeft, 1, 0);
+    put(&mut g, 6, 5, TrackKind::Straight, 1, 0);
+    put(&mut g, 5, 4, TrackKind::Straight, 0, 0);
+    let from_w = TrackPos { tile: IVec2::new(4, 5), entry: W, exit: E, t: 0.5 };
+    let a = from_w.ahead(&g, 1.7);
+    assert_eq!(a.tile, IVec2::new(6, 5));
+    g.edit(IVec2::new(5, 5)).unwrap().track_mut().unwrap().diverge = true;
+    let b = from_w.ahead(&g, 1.7);
+    assert_eq!(b.tile, IVec2::new(5, 4));
+    // Coming back from the branch always merges onto the stem.
+    let back = TrackPos { tile: IVec2::new(5, 4), entry: N, exit: S, t: 0.5 }.ahead(&g, 1.7);
+    assert_eq!(back.tile, IVec2::new(4, 5));
+}
+
+#[test]
+fn ramps_join_levels_and_mismatches_block() {
+    let mut g = Grid::default();
+    put(&mut g, 5, 5, TrackKind::Straight, 0, 0);
+    put(&mut g, 5, 4, TrackKind::Ramp, 0, 0); // rises toward N
+    put(&mut g, 5, 3, TrackKind::Straight, 0, 1);
+    let p = TrackPos { tile: IVec2::new(5, 5), entry: S, exit: N, t: 0.5 };
+    let up = p.ahead(&g, 2.0);
+    assert_eq!(up.tile, IVec2::new(5, 3));
+    assert!((up.world(&g).0.y - (LEVEL_H + RAIL_Y)).abs() < 1e-4);
+    // Lower the top piece: the levels no longer match, so the train stops.
+    g.edit(IVec2::new(5, 3)).unwrap().track_mut().unwrap().level = 0;
+    assert_eq!(p.ahead(&g, 2.0).tile, IVec2::new(5, 4));
+}
+
+#[test]
+fn trains_spawn_with_cars_trailing_behind() {
+    let g = small_loop();
+    let mut trains = Trains::default();
+    let id = trains.spawn(&g, IVec2::new(12, 10), &[CarKind::DieselEngine, CarKind::Boxcar, CarKind::Caboose]).unwrap();
+    let t = trains.get(id).unwrap();
+    assert_eq!(t.cars.len(), 3);
+    let a = t.cars[0].pos.world(&g).0;
+    let b = t.cars[1].pos.world(&g).0;
+    assert!((a - b).length() > 0.6);
+    assert!(trains.spawn(&g, IVec2::new(50, 50), &[CarKind::Passenger]).is_err());
+}
+
+#[test]
+fn save_round_trip_keeps_layout_and_trains() {
+    let mut g = Grid::default();
+    let mut trains = Trains::default();
+    build_demo(&mut g, &mut trains);
+    let json = save::to_json(&g, &trains).unwrap();
+    let mut g2 = Grid::default();
+    let mut t2 = Trains::default();
+    save::from_json(&json, &mut g2, &mut t2).unwrap();
+    assert!(g.tiles == g2.tiles);
+    assert_eq!(trains.list.len(), t2.list.len());
+    assert_eq!(t2.list[0].cars.len(), trains.list[0].cars.len());
+    assert!(save::from_json("{not json", &mut g2, &mut t2).is_err());
+}
+
+#[test]
+fn demo_trains_are_all_on_valid_track() {
+    let mut g = Grid::default();
+    let mut trains = Trains::default();
+    build_demo(&mut g, &mut trains);
+    assert_eq!(trains.list.len(), 3);
+    for t in &trains.list {
+        for c in &t.cars {
+            assert!(c.pos.valid(&g), "{} has a car off the rails", t.name);
+        }
+        // Every demo line is a closed loop: a long run never hits a dead end.
+        let mut p = t.cars[0].pos;
+        let m = p.advance(&g, 500.0); assert!((m - 500.0).abs() < 1e-2, "{} hit the end of the line at {:?} (track {:?})", t.name, p, g.track(p.tile));
+    }
+}

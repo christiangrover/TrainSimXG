@@ -17,8 +17,12 @@ struct SaveData {
     next_train_id: u32,
 }
 
+/// `saves/` next to the executable, so a copied game folder keeps its layouts.
 pub fn save_dir() -> PathBuf {
-    PathBuf::from("saves")
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("saves")))
+        .unwrap_or_else(|| PathBuf::from("saves"))
 }
 
 fn path_for(name: &str) -> PathBuf {

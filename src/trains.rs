@@ -4,7 +4,7 @@
 use crate::grid::*;
 use crate::mesh::*;
 use crate::models_vehicle::*;
-use crate::scene::Materials;
+use crate::materials::{meshes_of, spawn_parts, Materials};
 use crate::track::*;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -102,6 +102,11 @@ impl Trains {
 
     /// Puts a new train on the track with its first car at `tile`.
     pub fn spawn(&mut self, grid: &Grid, tile: IVec2, kinds: &[CarKind]) -> Result<u32, String> {
+        self.spawn_heading(grid, tile, kinds, None)
+    }
+
+    /// Like [`Self::spawn`], optionally heading out through a given tile edge.
+    pub fn spawn_heading(&mut self, grid: &Grid, tile: IVec2, kinds: &[CarKind], heading: Option<u8>) -> Result<u32, String> {
         if kinds.is_empty() {
             return Err("The consist is empty - add some cars in the train library.".into());
         }
@@ -113,6 +118,11 @@ impl Trains {
         let fwd = pos.ahead(grid, 3.0);
         if (pos.world(grid).0 - fwd.world(grid).0).length() < (pos.world(grid).0 - back.world(grid).0).length() {
             pos = pos.reversed();
+        }
+        if let Some(h) = heading {
+            if pos.entry == h {
+                pos = pos.reversed();
+            }
         }
         let mut cars = Vec::new();
         let mut cur = pos;
@@ -297,7 +307,7 @@ pub struct CarVisual {
 }
 
 #[derive(Resource, Default)]
-pub struct CarMeshes(HashMap<CarKind, Handle<Mesh>>);
+pub struct CarMeshes(HashMap<CarKind, Vec<(Mat, Handle<Mesh>)>>);
 
 fn sync_car_visuals(
     mut commands: Commands,
@@ -316,13 +326,9 @@ fn sync_car_visuals(
         }
         for t in &trains.list {
             for (i, c) in t.cars.iter().enumerate() {
-                let mesh = cache.0.entry(c.kind).or_insert_with(|| meshes.add(car_mesh(c.kind, default_paint(c.kind)).build())).clone();
-                commands.spawn((
-                    Mesh3d(mesh),
-                    MeshMaterial3d(mats.vertex.clone()),
-                    car_transform(&grid, c),
-                    CarVisual { train: t.id, index: i, kind: c.kind },
-                ));
+                let parts = cache.0.entry(c.kind).or_insert_with(|| meshes_of(&mut meshes, car_mesh(c.kind, default_paint(c.kind))));
+                let e = spawn_parts(&mut commands, &mats, parts, car_transform(&grid, c));
+                commands.entity(e).insert(CarVisual { train: t.id, index: i, kind: c.kind });
             }
         }
         return;
@@ -337,9 +343,13 @@ fn sync_car_visuals(
 #[derive(Component)]
 struct Puff {
     age: f32,
+    life: f32,
+    grow: f32,
     vel: Vec3,
 }
 
+/// Steam engines puff white smoke; diesels give dark exhaust, heavier when working hard.
+#[allow(clippy::too_many_arguments)]
 fn smoke(
     mut commands: Commands,
     time: Res<Time>,
@@ -349,25 +359,27 @@ fn smoke(
     mut puffs: Query<(Entity, &mut Puff, &mut Transform)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
-    mut res: Local<Option<(Handle<Mesh>, Handle<StandardMaterial>)>>,
+    mut res: Local<Option<(Handle<Mesh>, Handle<StandardMaterial>, Handle<StandardMaterial>)>>,
     mut timer: Local<f32>,
 ) {
     let dt = time.delta_secs();
-    let (mesh, mat) = res
+    let (mesh, steam, exhaust) = res
         .get_or_insert_with(|| {
+            let puff = |c: Color| StandardMaterial { base_color: c, alpha_mode: AlphaMode::Blend, perceptual_roughness: 1.0, ..default() };
             (
                 meshes.add(Sphere::new(0.05).mesh().ico(1).unwrap()),
-                mats.add(StandardMaterial { base_color: Color::srgba(0.92, 0.92, 0.95, 0.35), alpha_mode: AlphaMode::Blend, ..default() }),
+                mats.add(puff(Color::srgba(0.95, 0.95, 0.97, 0.35))),
+                mats.add(puff(Color::srgba(0.2, 0.2, 0.22, 0.3))),
             )
         })
         .clone();
     for (e, mut p, mut tf) in &mut puffs {
         p.age += dt;
         tf.translation += p.vel * dt;
-        let s = 0.6 + p.age * 1.1;
-        let fade = (1.0 - p.age / 1.8).max(0.0);
+        let s = 0.6 + p.age * p.grow;
+        let fade = (1.0 - p.age / p.life).max(0.0);
         tf.scale = Vec3::splat(s * fade.sqrt());
-        if p.age > 1.8 {
+        if p.age > p.life {
             commands.entity(e).despawn();
         }
     }
@@ -380,19 +392,29 @@ fn smoke(
     }
     *timer = 0.0;
     for (v, tf) in &cars {
-        if v.kind != CarKind::SteamEngine {
+        let Some(stack) = v.kind.exhaust() else { continue };
+        let Some(t) = trains.get(v.train) else { continue };
+        let speed = t.speed.abs();
+        let target = if t.manual { t.throttle.abs() * MAX_SPEED } else { t.cruise };
+        let working = speed < target - 0.05;
+        let steam_loco = v.kind == CarKind::SteamEngine;
+        let chance = if steam_loco {
+            if speed < 0.05 { 0.3 } else { 1.0 }
+        } else if working {
+            0.9
+        } else {
+            0.25
+        };
+        if rand::random::<f32>() > chance {
             continue;
         }
-        let speed = trains.get(v.train).map(|t| t.speed.abs()).unwrap_or(0.0);
-        if speed < 0.05 && rand::random::<f32>() > 0.3 {
-            continue;
-        }
-        let chimney = tf.transform_point(Vec3::new(0.0, 0.45, 0.31));
+        let (mat, life, grow, scale) = if steam_loco { (steam.clone(), 1.8, 1.1, 1.0) } else { (exhaust.clone(), 1.2, 0.9, 0.55) };
+        let jitter = Vec3::new(rand::random::<f32>() * 0.1 - 0.05, 0.0, rand::random::<f32>() * 0.1 - 0.05);
         commands.spawn((
             Mesh3d(mesh.clone()),
-            MeshMaterial3d(mat.clone()),
-            Transform::from_translation(chimney),
-            Puff { age: 0.0, vel: Vec3::new(rand::random::<f32>() * 0.1 - 0.05, 0.35, rand::random::<f32>() * 0.1 - 0.05) },
+            MeshMaterial3d(mat),
+            Transform::from_translation(tf.transform_point(stack)).with_scale(Vec3::splat(scale)),
+            Puff { age: 0.0, life, grow: grow * scale, vel: jitter + Vec3::Y * if steam_loco { 0.35 } else { 0.25 } },
             bevy::pbr::NotShadowCaster,
         ));
     }

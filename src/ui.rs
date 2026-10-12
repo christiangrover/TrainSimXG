@@ -194,13 +194,19 @@ fn ui_system(
                 ui.add(egui::Slider::new(&mut bs.brush, 1..=6).text("brush"));
             });
             egui::CollapsingHeader::new("Buildings").default_open(true).show(ui, |ui| {
-                for d in &DecorKind::ALL[..8] {
-                    tool_button(ui, &mut bs, Tool::Decor(*d));
+                for d in DecorKind::BUILDINGS {
+                    tool_button(ui, &mut bs, Tool::Decor(d));
                 }
             });
+            egui::CollapsingHeader::new("Emergency services").default_open(true).show(ui, |ui| {
+                for d in DecorKind::EMERGENCY {
+                    tool_button(ui, &mut bs, Tool::Decor(d));
+                }
+                ui.small("Each one sends its own vehicles out onto nearby roads.");
+            });
             egui::CollapsingHeader::new("Nature & details").default_open(false).show(ui, |ui| {
-                for d in &DecorKind::ALL[8..] {
-                    tool_button(ui, &mut bs, Tool::Decor(*d));
+                for d in DecorKind::NATURE {
+                    tool_button(ui, &mut bs, Tool::Decor(d));
                 }
             });
         });

@@ -5,7 +5,11 @@ use crate::grid::*;
 use crate::scene::FLOOR_Y;
 use crate::trains::*;
 use crate::ui::UiCapture;
+use bevy::core_pipeline::bloom::Bloom;
+use bevy::core_pipeline::prepass::{DepthPrepass, NormalPrepass};
+use bevy::core_pipeline::smaa::Smaa;
 use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::pbr::ScreenSpaceAmbientOcclusion;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 
@@ -98,8 +102,16 @@ impl CamState {
 fn spawn_camera(mut commands: Commands) {
     commands.spawn((
         Camera3d::default(),
+        Camera { hdr: true, ..default() },
         Projection::Perspective(PerspectiveProjection { near: 0.01, far: 2000.0, fov: 60f32.to_radians(), ..default() }),
         Tonemapping::TonyMcMapface,
+        // Soft contact shadows, glowing lights, and smooth edges.
+        Msaa::Off,
+        Smaa::default(),
+        DepthPrepass,
+        NormalPrepass,
+        ScreenSpaceAmbientOcclusion::default(),
+        Bloom::NATURAL,
         Transform::from_xyz(0.0, 30.0, 40.0).looking_at(Vec3::ZERO, Vec3::Y),
         DistanceFog { color: Color::srgb(0.55, 0.7, 0.85), falloff: FogFalloff::Linear { start: 250.0, end: 600.0 }, ..default() },
     ));
@@ -319,7 +331,21 @@ fn apply_camera(
             target = Transform::from_translation(eye).with_rotation(ct.rotation * local * Quat::from_rotation_y(std::f32::consts::PI));
         }
     }
+    // Never let an outside camera dip into a hill or under a bridge deck.
     if smooth {
+        let mut target = target;
+        let t = world_to_tile(target.translation);
+        if let Some(tile) = grid.get(t) {
+            let mut ground = tile.surface_y();
+            if let Some(tr) = tile.track() {
+                ground = ground.max(tr.max_level() as f32 * LEVEL_H);
+            }
+            if target.translation.y < ground + 0.3 {
+                let look = target.translation + target.forward() * 2.0;
+                target.translation.y = ground + 0.3;
+                target.look_at(look, Vec3::Y);
+            }
+        }
         let k = 1.0 - (-12.0 * dt).exp();
         tf.translation = tf.translation.lerp(target.translation, k);
         tf.rotation = tf.rotation.slerp(target.rotation, k);

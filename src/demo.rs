@@ -139,6 +139,11 @@ pub fn build_demo(grid: &mut Grid, trains: &mut Trains) {
         road(&mut tiles, x, 72);
     }
 
+    // Emergency services facing the streets.
+    for (x, z, kind, rot) in [(37, 47, DecorKind::PoliceStation, 0), (53, 41, DecorKind::FireStation, 2), (47, 57, DecorKind::Hospital, 2)] {
+        decor(&mut tiles, x, z, kind, rot);
+    }
+
     // Houses along the roads, facing the street.
     let houses = [DecorKind::House, DecorKind::Cottage, DecorKind::Shop, DecorKind::House, DecorKind::Apartment, DecorKind::House];
     let mut i = 0;
@@ -204,8 +209,9 @@ pub fn build_demo(grid: &mut Grid, trains: &mut Trains) {
 
     trains.list.clear();
     trains.next_id = 0;
-    let _ = trains.spawn(grid, IVec2::new(45, z0), &[CarKind::SteamEngine, CarKind::Tender, CarKind::Passenger, CarKind::Dining, CarKind::Sleeper, CarKind::Caboose]);
-    let _ = trains.spawn(grid, IVec2::new(x1, 52), &[CarKind::DieselEngine, CarKind::Boxcar, CarKind::Tanker, CarKind::Hopper, CarKind::LogCar, CarKind::Caboose]);
+    // Both main-line trains run clockwise so they follow each other round.
+    let _ = trains.spawn_heading(grid, IVec2::new(45, z0), &[CarKind::SteamEngine, CarKind::Tender, CarKind::Passenger, CarKind::Dining, CarKind::Sleeper, CarKind::Caboose], Some(E));
+    let _ = trains.spawn_heading(grid, IVec2::new(x1, 52), &[CarKind::DieselRoad, CarKind::Boxcar, CarKind::Tanker, CarKind::Hopper, CarKind::LogCar, CarKind::Caboose], Some(S));
     let _ = trains.spawn(grid, IVec2::new(4, 62), &[CarKind::SteamEngine, CarKind::Tender, CarKind::Passenger, CarKind::Passenger]);
     trains.selected = trains.list.first().map(|t| t.id);
 }

@@ -1,17 +1,120 @@
 //! A tiny procedural mesh builder. Every model in the game (track, houses,
 //! trains, terrain) is assembled from flat-shaded, vertex-colored primitives.
+//! Each primitive is drawn in the builder's current material ([`Mat`]); texture
+//! coordinates are box-projected so tiling textures line up across faces.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use std::f32::consts::TAU;
 
+/// Surface materials. Textured ones tile every `uv_scale` world units and are
+/// tinted by the vertex color.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Mat {
+    /// Untextured matte paint.
+    Plain,
+    /// Untextured glossy paint (vehicles).
+    Paint,
+    Steel,
+    Glass,
+    /// Warm glowing light (lamps, headlights).
+    Light,
+    /// Emergency light bars; these flash.
+    FlashRed,
+    FlashBlue,
+    Water,
+    Grass,
+    Foliage,
+    Earth,
+    Rock,
+    Sand,
+    Ballast,
+    Asphalt,
+    TableWood,
+    Floor,
+    Brick,
+    Plaster,
+    RoofClay,
+    RoofSlate,
+    Concrete,
+    Planks,
+    Stone,
+    Corrugated,
+}
+
+impl Mat {
+    pub const ALL: [Mat; 25] = [
+        Mat::Plain,
+        Mat::Paint,
+        Mat::Steel,
+        Mat::Glass,
+        Mat::Light,
+        Mat::FlashRed,
+        Mat::FlashBlue,
+        Mat::Water,
+        Mat::Grass,
+        Mat::Foliage,
+        Mat::Earth,
+        Mat::Rock,
+        Mat::Sand,
+        Mat::Ballast,
+        Mat::Asphalt,
+        Mat::TableWood,
+        Mat::Floor,
+        Mat::Brick,
+        Mat::Plaster,
+        Mat::RoofClay,
+        Mat::RoofSlate,
+        Mat::Concrete,
+        Mat::Planks,
+        Mat::Stone,
+        Mat::Corrugated,
+    ];
+
+    /// World units covered by one repeat of the texture.
+    pub fn uv_scale(self) -> f32 {
+        match self {
+            Mat::Grass => 2.5,
+            Mat::Foliage => 0.6,
+            Mat::Earth => 1.5,
+            Mat::Rock => 3.0,
+            Mat::Sand => 3.0,
+            Mat::Ballast => 0.6,
+            Mat::Asphalt => 1.2,
+            Mat::TableWood => 12.0,
+            Mat::Floor => 8.0,
+            Mat::Brick => 0.35,
+            Mat::Plaster => 0.6,
+            Mat::RoofClay => 0.35,
+            Mat::RoofSlate => 0.4,
+            Mat::Concrete => 1.0,
+            Mat::Planks => 0.5,
+            Mat::Stone => 0.5,
+            Mat::Corrugated => 0.35,
+            _ => 1.0,
+        }
+    }
+}
+
 #[derive(Default)]
-pub struct Geo {
+struct Part {
     pos: Vec<[f32; 3]>,
     nrm: Vec<[f32; 3]>,
+    uv: Vec<[f32; 2]>,
     col: Vec<[f32; 4]>,
     idx: Vec<u32>,
+}
+
+pub struct Geo {
+    parts: Vec<(Mat, Part)>,
+    mat: Mat,
+}
+
+impl Default for Geo {
+    fn default() -> Self {
+        Geo { parts: vec![], mat: Mat::Plain }
+    }
 }
 
 /// sRGB hex-ish helper: `rgb(0.8, 0.2, 0.1)`.
@@ -31,13 +134,42 @@ pub fn basis_from_dir(dir: Vec3) -> Quat {
     Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-pitch)
 }
 
+/// Box-projected texture coordinate for a point on a face with normal `n`.
+fn box_uv(p: Vec3, n: Vec3, scale: f32) -> [f32; 2] {
+    let a = n.abs();
+    let uv = if a.y >= a.x && a.y >= a.z {
+        Vec2::new(p.x, p.z)
+    } else if a.x >= a.z {
+        Vec2::new(p.z * n.x.signum(), -p.y)
+    } else {
+        Vec2::new(-p.x * n.z.signum(), -p.y)
+    };
+    (uv / scale).to_array()
+}
+
 impl Geo {
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Sets the material used by the following primitives; returns the old one.
+    pub fn mat(&mut self, m: Mat) -> Mat {
+        std::mem::replace(&mut self.mat, m)
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.idx.is_empty()
+        self.parts.iter().all(|(_, p)| p.idx.is_empty())
+    }
+
+    fn part(&mut self, m: Mat) -> &mut Part {
+        let i = match self.parts.iter().position(|(pm, _)| *pm == m) {
+            Some(i) => i,
+            None => {
+                self.parts.push((m, Part::default()));
+                self.parts.len() - 1
+            }
+        };
+        &mut self.parts[i].1
     }
 
     /// Adds a flat polygon (convex, counter-clockwise when seen from the front).
@@ -46,18 +178,20 @@ impl Geo {
             return;
         }
         let n = (pts[1] - pts[0]).cross(pts[2] - pts[0]).normalize_or_zero();
-        let base = self.pos.len() as u32;
+        let scale = self.mat.uv_scale();
+        let part = self.part(self.mat);
+        let base = part.pos.len() as u32;
         let c = lin(color);
         for p in pts {
-            self.pos.push(p.to_array());
-            self.nrm.push(n.to_array());
-            self.col.push(c);
+            part.pos.push(p.to_array());
+            part.nrm.push(n.to_array());
+            part.uv.push(box_uv(*p, n, scale));
+            part.col.push(c);
         }
         for i in 1..(pts.len() as u32 - 1) {
-            self.idx.extend_from_slice(&[base, base + i, base + i + 1]);
+            part.idx.extend_from_slice(&[base, base + i, base + i + 1]);
         }
     }
-
     pub fn quad(&mut self, a: Vec3, b: Vec3, c: Vec3, d: Vec3, color: Color) {
         self.poly(&[a, b, c, d], color);
     }
@@ -141,7 +275,9 @@ impl Geo {
 
     /// Triangular prism roof: ridge along local X, spanning `w` (x) by `d` (z),
     /// base at `base_y`, peak height `h`, rotated about Y by `rot`.
-    pub fn roof(&mut self, center: Vec3, w: f32, d: f32, h: f32, rot: Quat, color: Color, gable: Color) {
+    /// The slopes use the current material; the gable ends use gable_mat.
+    #[allow(clippy::too_many_arguments)]
+    pub fn roof(&mut self, center: Vec3, w: f32, d: f32, h: f32, rot: Quat, color: Color, gable: Color, gable_mat: Mat) {
         let p = |x: f32, y: f32, z: f32| center + rot * Vec3::new(x, y, z);
         let (hw, hd) = (w * 0.5, d * 0.5);
         let a = p(-hw, 0.0, hd);
@@ -152,31 +288,42 @@ impl Geo {
         let f = p(hw, 0.0, -hd);
         self.quad(a, b, c, dd, color);
         self.quad(f, e, dd, c, color);
+        let old = self.mat(gable_mat);
         self.poly(&[b, f, c], gable);
         self.poly(&[e, a, dd], gable);
         self.quad(e, f, b, a, gable);
+        self.mat(old);
     }
 
-    /// Appends another builder's geometry, transformed.
+    /// Appends another builder's geometry, transformed (texture coordinates are kept).
     pub fn append(&mut self, other: Geo, tf: Transform) {
-        let base = self.pos.len() as u32;
-        for p in other.pos {
-            self.pos.push(tf.transform_point(Vec3::from(p)).to_array());
+        for (m, op) in other.parts {
+            let part = self.part(m);
+            let base = part.pos.len() as u32;
+            part.pos.extend(op.pos.into_iter().map(|p| tf.transform_point(Vec3::from(p)).to_array()));
+            part.nrm.extend(op.nrm.into_iter().map(|n| (tf.rotation * Vec3::from(n)).to_array()));
+            part.uv.extend(op.uv);
+            part.col.extend(op.col);
+            part.idx.extend(op.idx.into_iter().map(|i| i + base));
         }
-        for n in other.nrm {
-            self.nrm.push((tf.rotation * Vec3::from(n)).to_array());
-        }
-        self.col.extend(other.col);
-        self.idx.extend(other.idx.into_iter().map(|i| i + base));
     }
 
-    pub fn build(self) -> Mesh {
-        let uv = vec![[0.0f32, 0.0]; self.pos.len()];
-        Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
-            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.pos)
-            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, self.nrm)
-            .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.col)
-            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
-            .with_inserted_indices(Indices::U32(self.idx))
+    /// One mesh per material.
+    pub fn build(self) -> Vec<(Mat, Mesh)> {
+        self.parts
+            .into_iter()
+            .filter(|(_, p)| !p.idx.is_empty())
+            .map(|(m, p)| {
+                let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+                    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, p.pos)
+                    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, p.nrm)
+                    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, p.uv)
+                    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, p.col)
+                    .with_inserted_indices(Indices::U32(p.idx));
+                // Normal-mapped materials need tangents.
+                let _ = mesh.generate_tangents();
+                (m, mesh)
+            })
+            .collect()
     }
 }

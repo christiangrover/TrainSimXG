@@ -222,10 +222,14 @@ pub enum DecorKind {
     Bench,
     Fountain,
     Person,
+    PoliceStation,
+    FireStation,
+    Hospital,
 }
 
 impl DecorKind {
-    pub const ALL: [DecorKind; 18] = [
+    /// Buildings shown in the toolbox's Buildings section.
+    pub const BUILDINGS: [DecorKind; 8] = [
         DecorKind::House,
         DecorKind::Cottage,
         DecorKind::Shop,
@@ -234,6 +238,9 @@ impl DecorKind {
         DecorKind::Barn,
         DecorKind::Silo,
         DecorKind::Windmill,
+    ];
+    pub const EMERGENCY: [DecorKind; 3] = [DecorKind::PoliceStation, DecorKind::FireStation, DecorKind::Hospital];
+    pub const NATURE: [DecorKind; 10] = [
         DecorKind::PineTree,
         DecorKind::OakTree,
         DecorKind::Bush,
@@ -266,6 +273,9 @@ impl DecorKind {
             DecorKind::Bench => "Bench",
             DecorKind::Fountain => "Fountain",
             DecorKind::Person => "Person",
+            DecorKind::PoliceStation => "Police station",
+            DecorKind::FireStation => "Fire station",
+            DecorKind::Hospital => "Hospital",
         }
     }
 }

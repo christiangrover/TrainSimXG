@@ -32,13 +32,29 @@ Choose a tool in the left toolbox, then left-click on the table. Drag to paint r
   - Track above the ground is drawn as a **bridge** with piers.
   - Track below the ground is a **tunnel**, with stone portals where it comes out.
 - **Switches:** click one with the Select tool to flip it. Green means straight, orange means diverging.
-- **Trains:** build a train in the *Train library* (engines, tender, passenger, sleeper, dining, boxcar, tanker, hopper, log car, caboose), click *Place on track…*, then click on any track.
+- **Trains:** build a train in the *Train library*, click *Place on track…*, then click on any track. The library has:
+  - **Engines:** a steam engine, a diesel road engine and a diesel streamliner. Steam engines puff white smoke; diesels give dark exhaust, heaviest when pulling away.
+  - **Cars:** coal tender, passenger, sleeper, dining, boxcar, tanker, coal hopper, log car and caboose.
 - **Auto trains** cruise, stop at stations, wait for trains ahead, and reverse at the end of the line. **Manual trains** are driven with the throttle, either from the panel or from the engineer's view.
-- **Road traffic:** cars drive on every road and wait at closed crossing gates. Set how many with the slider.
+- **Road traffic:** cars, vans, trucks and buses drive on every road. They keep a safe gap, take turns at junctions, and wait at closed crossing gates. Set how many with the slider.
+- **Emergency services:** a *Police station* sends out 2 police cars, a *Hospital* 2 ambulances, and a *Fire station* a fire engine, onto the nearby roads. Now and then they go out on a call, with flashing light bars and a faster speed. Remove the building and its vehicles go too.
 
 ## Saving
 
 Type a name in the top bar and press **Save**. Layouts, including terrain, every piece and every train, are saved as JSON in `saves/`. Load them again from the **Load…** menu.
+
+## Running it on another Windows PC
+
+The game is a single `.exe` with no installer and nothing else to install. The models are generated in code, the textures are embedded in the exe, and so is the C runtime.
+
+- **Build the zip yourself:** run `.\package.ps1`. It creates `dist\TableTopTrains-windows-x64.zip`. Copy the zip to the other PC, unzip it anywhere, and double-click `TableTopTrains.exe`.
+- **Let GitHub build it:** push a version tag (`git tag v0.1.0` then `git push origin v0.1.0`). The *Release* workflow tests the code, builds the zip and attaches it to a GitHub Release, ready to download.
+
+Saved layouts go in a `saves` folder next to the exe. Windows SmartScreen may warn about an unsigned app the first time you run it; click **More info → Run anyway**. The game needs a graphics card with DirectX 12 or Vulkan, which any Windows 11 PC has.
+
+## Textures
+
+The photo textures (grass, gravel, asphalt, brick, roof tiles, wood and more) are CC0 public-domain textures from [Poly Haven](https://polyhaven.com). They are free to use with no licence fees. See [assets/textures/CREDITS.md](assets/textures/CREDITS.md).
 
 ## Code map
 
@@ -47,13 +63,16 @@ Type a name in the top bar and press **Save**. Layouts, including terrain, every
 | `grid.rs` | tiles, track pieces, how edges connect |
 | `track.rs` | rail geometry and moving along the track |
 | `trains.rs` | train simulation, smoke |
-| `roads.rs` | road traffic, crossing gates |
+| `roads.rs` | road traffic, emergency vehicles, crossing gates |
 | `build.rs` | toolbox, picking tiles |
 | `camera.rs` | the five views |
-| `scene.rs` | room, table, terrain and tile meshes |
+| `scene.rs` | room, table, lighting, terrain and tile meshes |
+| `mesh.rs`, `materials.rs` | shape builder, textures and materials |
 | `models_*.rs` | procedural models |
 | `ui.rs` | panels and overlays |
 | `save.rs` | save and load |
 | `demo.rs` | starter layout |
 
-Run `cargo test` for the core logic tests. To capture each view as a screenshot and then exit, set `TRAINSIM_SHOTS=<dir>`.
+Run `cargo test` for the core logic tests. Two debug aids:
+- `TRAINSIM_SHOTS=<dir>` captures a tour of screenshots and then exits.
+- `TRAINSIM_TRAFFIC_CHECK=<runs>` soak-tests road traffic headlessly, failing on any collision or gridlock.

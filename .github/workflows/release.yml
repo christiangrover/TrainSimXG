@@ -1,0 +1,33 @@
+# Push a tag like v0.1.0 to build the Windows zip and attach it to a GitHub release.
+# It can also be run by hand from the Actions tab (the zip is then a workflow artifact).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test
+      - name: Build and package
+        shell: pwsh
+        run: ./package.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TableTopTrains-windows-x64
+          path: dist/TableTopTrains-windows-x64.zip
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/TableTopTrains-windows-x64.zip

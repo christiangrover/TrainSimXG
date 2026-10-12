@@ -3,6 +3,7 @@
 
 use crate::grid::*;
 use crate::mesh::*;
+use crate::materials::{self, meshes_of, spawn_geo, spawn_parts, Materials};
 use crate::models_tile::*;
 use bevy::pbr::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
@@ -20,12 +21,6 @@ impl Plugin for ScenePlugin {
             .add_systems(Startup, setup_scene)
             .add_systems(PostUpdate, (sync_terrain, sync_tiles).chain().before(TransformSystem::TransformPropagate));
     }
-}
-
-#[derive(Resource)]
-pub struct Materials {
-    pub vertex: Handle<StandardMaterial>,
-    pub terrain: Handle<StandardMaterial>,
 }
 
 #[derive(Resource, Default)]
@@ -46,74 +41,78 @@ pub struct GateArm {
 fn setup_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut mats: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut std_mats: ResMut<Assets<StandardMaterial>>,
 ) {
-    let vertex = mats.add(StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 0.8, ..default() });
-    let terrain = mats.add(StandardMaterial {
-        base_color: Color::WHITE,
-        perceptual_roughness: 0.95,
-        double_sided: true,
-        cull_mode: None,
-        ..default()
-    });
-    commands.insert_resource(Materials { vertex: vertex.clone(), terrain });
+    let mats = materials::create(&mut images, &mut std_mats);
 
-    // Table top, rim and legs, floor and walls.
+    // Table top, rim and legs.
     let half = GRID as f32 / 2.0;
-    let wood = rgb(0.55, 0.36, 0.2);
     let mut t = Geo::new();
+    t.mat(Mat::TableWood);
+    let wood = rgb(0.85, 0.7, 0.55);
     t.aabb(Vec3::new(-half - 2.0, -1.2, -half - 2.0), Vec3::new(half + 2.0, -0.12, half + 2.0), wood);
     for (x, z) in [(-1.0f32, -1.0f32), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
         let c = Vec3::new(x * (half - 1.0), 0.0, z * (half - 1.0));
-        t.aabb(c + Vec3::new(-1.5, FLOOR_Y, -1.5), c + Vec3::new(1.5, -1.2, 1.5), rgb(0.45, 0.28, 0.15));
+        t.aabb(c + Vec3::new(-1.5, FLOOR_Y, -1.5), c + Vec3::new(1.5, -1.2, 1.5), rgb(0.7, 0.55, 0.42));
     }
-    t.aabb(Vec3::new(-half - 2.0, -0.12, -half - 2.0), Vec3::new(-half, 0.15, half + 2.0), rgb(0.5, 0.32, 0.18));
-    t.aabb(Vec3::new(half, -0.12, -half - 2.0), Vec3::new(half + 2.0, 0.15, half + 2.0), rgb(0.5, 0.32, 0.18));
-    t.aabb(Vec3::new(-half, -0.12, -half - 2.0), Vec3::new(half, 0.15, -half), rgb(0.5, 0.32, 0.18));
-    t.aabb(Vec3::new(-half, -0.12, half), Vec3::new(half, 0.15, half + 2.0), rgb(0.5, 0.32, 0.18));
-    commands.spawn((Mesh3d(meshes.add(t.build())), MeshMaterial3d(vertex.clone())));
+    let rim = rgb(0.75, 0.58, 0.45);
+    t.aabb(Vec3::new(-half - 2.0, -0.12, -half - 2.0), Vec3::new(-half, 0.15, half + 2.0), rim);
+    t.aabb(Vec3::new(half, -0.12, -half - 2.0), Vec3::new(half + 2.0, 0.15, half + 2.0), rim);
+    t.aabb(Vec3::new(-half, -0.12, -half - 2.0), Vec3::new(half, 0.15, -half), rim);
+    t.aabb(Vec3::new(-half, -0.12, half), Vec3::new(half, 0.15, half + 2.0), rim);
+    spawn_geo(&mut commands, &mut meshes, &mats, t, Transform::default());
 
+    // The room: wooden floor, a rug, plastered walls and a sunny window.
     let room = 160.0;
     let mut r = Geo::new();
-    r.aabb(Vec3::new(-room, FLOOR_Y - 1.0, -room), Vec3::new(room, FLOOR_Y, room), rgb(0.6, 0.5, 0.42));
-    // A rug under the table.
-    r.aabb(Vec3::new(-80.0, FLOOR_Y, -80.0), Vec3::new(80.0, FLOOR_Y + 0.05, 80.0), rgb(0.55, 0.2, 0.2));
-    let wall = rgb(0.85, 0.82, 0.72);
+    r.mat(Mat::Floor);
+    r.aabb(Vec3::new(-room, FLOOR_Y - 1.0, -room), Vec3::new(room, FLOOR_Y, room), rgb(0.9, 0.8, 0.7));
+    r.mat(Mat::Plain);
+    r.aabb(Vec3::new(-80.0, FLOOR_Y, -80.0), Vec3::new(80.0, FLOOR_Y + 0.05, 80.0), rgb(0.5, 0.17, 0.17));
+    r.aabb(Vec3::new(-76.0, FLOOR_Y + 0.05, -76.0), Vec3::new(76.0, FLOOR_Y + 0.07, 76.0), rgb(0.62, 0.25, 0.2));
+    r.mat(Mat::Plaster);
+    let wall = rgb(0.95, 0.92, 0.82);
     let wh = 90.0;
     r.aabb(Vec3::new(-room, FLOOR_Y, -room - 1.0), Vec3::new(room, FLOOR_Y + wh, -room), wall);
     r.aabb(Vec3::new(-room, FLOOR_Y, room), Vec3::new(room, FLOOR_Y + wh, room + 1.0), wall);
-    r.aabb(Vec3::new(-room - 1.0, FLOOR_Y, -room), Vec3::new(-room, FLOOR_Y + wh, room), rgb(0.8, 0.85, 0.75));
-    r.aabb(Vec3::new(room, FLOOR_Y, -room), Vec3::new(room + 1.0, FLOOR_Y + wh, room), rgb(0.8, 0.85, 0.75));
-    // Skirting boards and a big window.
+    r.aabb(Vec3::new(-room - 1.0, FLOOR_Y, -room), Vec3::new(-room, FLOOR_Y + wh, room), rgb(0.88, 0.93, 0.85));
+    r.aabb(Vec3::new(room, FLOOR_Y, -room), Vec3::new(room + 1.0, FLOOR_Y + wh, room), rgb(0.88, 0.93, 0.85));
+    r.mat(Mat::Paint);
     r.aabb(Vec3::new(-room, FLOOR_Y, -room), Vec3::new(room, FLOOR_Y + 3.0, -room + 0.5), rgb(0.95, 0.95, 0.95));
-    r.aabb(Vec3::new(-40.0, FLOOR_Y + 30.0, -room + 0.01), Vec3::new(40.0, FLOOR_Y + 75.0, -room + 0.3), rgb(0.6, 0.8, 1.0));
-    commands.spawn((Mesh3d(meshes.add(r.build())), MeshMaterial3d(vertex)));
+    r.aabb(Vec3::new(-42.0, FLOOR_Y + 28.0, -room + 0.01), Vec3::new(42.0, FLOOR_Y + 77.0, -room + 0.25), rgb(0.95, 0.95, 0.95));
+    r.mat(Mat::Plain);
+    r.aabb(Vec3::new(-40.0, FLOOR_Y + 30.0, -room + 0.02), Vec3::new(40.0, FLOOR_Y + 75.0, -room + 0.3), rgb(0.75, 0.88, 1.0));
+    spawn_geo(&mut commands, &mut meshes, &mats, r, Transform::default());
+    commands.insert_resource(mats);
 
-    commands.insert_resource(AmbientLight { color: Color::WHITE, brightness: 280.0, ..default() });
+    commands.insert_resource(AmbientLight { color: rgb(0.85, 0.9, 1.0), brightness: 350.0, ..default() });
     commands.insert_resource(ClearColor(rgb(0.55, 0.7, 0.85)));
+    // Afternoon sun slanting in through the window.
     commands.spawn((
-        DirectionalLight { illuminance: 6500.0, shadows_enabled: true, ..default() },
-        Transform::from_xyz(30.0, 80.0, 45.0).looking_at(Vec3::ZERO, Vec3::Y),
-        CascadeShadowConfigBuilder { maximum_distance: 220.0, first_cascade_far_bound: 15.0, ..default() }.build(),
+        DirectionalLight { illuminance: 9000.0, color: rgb(1.0, 0.95, 0.85), shadows_enabled: true, ..default() },
+        Transform::from_xyz(30.0, 70.0, 55.0).looking_at(Vec3::ZERO, Vec3::Y),
+        CascadeShadowConfigBuilder { maximum_distance: 200.0, first_cascade_far_bound: 12.0, num_cascades: 4, ..default() }.build(),
     ));
     commands.spawn((
-        PointLight { intensity: 1.5e8, range: 400.0, shadows_enabled: false, ..default() },
+        PointLight { intensity: 1.0e8, range: 400.0, color: rgb(1.0, 0.9, 0.75), shadows_enabled: false, ..default() },
         Transform::from_xyz(0.0, FLOOR_Y + 85.0, 0.0),
     ));
 }
 
-fn ground_color(tile: &Tile, t: IVec2) -> Color {
+/// Gentle per-tile tint so tiled textures don't look uniform.
+fn ground_tint(tile: &Tile, t: IVec2) -> (Mat, Color) {
     let n = (((t.x * 7 + t.y * 13) ^ (t.x * t.y)) & 7) as f32 / 7.0;
-    let lift = tile.height as f32 * 0.025;
+    let lift = tile.height as f32 * 0.015;
     match tile.ground {
-        Ground::Grass => rgb(0.3 + n * 0.04 + lift, 0.58 + n * 0.05 + lift, 0.25 + lift * 0.5),
-        Ground::Sand => rgb(0.86 + n * 0.03, 0.78 + n * 0.03, 0.55),
-        Ground::Water => rgb(0.2, 0.45 + n * 0.03, 0.8),
-        Ground::Rock => rgb(0.5 + n * 0.04 + lift, 0.48 + n * 0.04 + lift, 0.45 + lift),
+        Ground::Grass => (Mat::Grass, rgb(0.9 + n * 0.08 + lift, 0.95 + n * 0.05 + lift, 0.85 + lift)),
+        Ground::Sand => (Mat::Sand, rgb(1.0, 0.97, 0.9)),
+        Ground::Water => (Mat::Water, rgb(0.16, 0.36 + n * 0.03, 0.52)),
+        Ground::Rock => (Mat::Rock, rgb(0.9 + lift, 0.9 + lift, 0.9 + lift)),
     }
 }
 
-fn chunk_mesh(grid: &Grid, c: IVec2) -> Mesh {
+fn chunk_geo(grid: &Grid, c: IVec2) -> Geo {
     let mut mb = Geo::new();
     for z in c.y * CHUNK..(c.y + 1) * CHUNK {
         for x in c.x * CHUNK..(c.x + 1) * CHUNK {
@@ -122,7 +121,10 @@ fn chunk_mesh(grid: &Grid, c: IVec2) -> Mesh {
             let ctr = tile_center(t);
             let y = tile.surface_y();
             let p = |dx: f32, dz: f32, yy: f32| Vec3::new(ctr.x + dx, yy, ctr.z + dz);
-            mb.quad(p(-0.5, 0.5, y), p(0.5, 0.5, y), p(0.5, -0.5, y), p(-0.5, -0.5, y), ground_color(tile, t));
+            let (mat, col) = ground_tint(tile, t);
+            mb.mat(mat);
+            mb.quad(p(-0.5, 0.5, y), p(0.5, 0.5, y), p(0.5, -0.5, y), p(-0.5, -0.5, y), col);
+            mb.mat(if tile.ground == Ground::Rock { Mat::Rock } else { Mat::Earth });
             for e in 0..4u8 {
                 let nt = t + edge_dir(e);
                 let ny = grid.get(nt).map(|n| n.surface_y()).unwrap_or(0.0);
@@ -137,8 +139,8 @@ fn chunk_mesh(grid: &Grid, c: IVec2) -> Mesh {
                     a = Vec2::new(-a.y, a.x);
                     b = Vec2::new(-b.y, b.x);
                 }
-                let earth = if tile.ground == Ground::Rock { rgb(0.42, 0.4, 0.38) } else { rgb(0.5, 0.36, 0.22) };
-                let layer = |k: i32| if k % 2 == 0 { earth } else { earth.mix(&rgb(0.3, 0.22, 0.15), 0.25) };
+                let earth = rgb(0.95, 0.9, 0.85);
+                let layer = |k: i32| if k % 2 == 0 { earth } else { rgb(0.82, 0.76, 0.7) };
                 // One band per level so cliffs look like stacked layers.
                 let mut lo = ny;
                 let mut k = 0;
@@ -151,7 +153,7 @@ fn chunk_mesh(grid: &Grid, c: IVec2) -> Mesh {
             }
         }
     }
-    mb.build()
+    mb
 }
 
 fn sync_terrain(
@@ -176,13 +178,11 @@ fn sync_terrain(
     }
     grid.terrain_dirty.clear();
     for c in chunks {
-        let mesh = meshes.add(chunk_mesh(&grid, c));
-        if let Some(&e) = ents.chunks.get(&c) {
-            commands.entity(e).insert(Mesh3d(mesh));
-        } else {
-            let e = commands.spawn((Mesh3d(mesh), MeshMaterial3d(mats.terrain.clone()), Transform::default())).id();
-            ents.chunks.insert(c, e);
+        if let Some(e) = ents.chunks.remove(&c) {
+            commands.entity(e).despawn();
         }
+        let e = spawn_geo(&mut commands, &mut meshes, &mats, chunk_geo(&grid, c), Transform::default());
+        ents.chunks.insert(c, e);
     }
 }
 
@@ -192,6 +192,7 @@ fn sync_tiles(
     mut ents: ResMut<TileEntities>,
     mut meshes: ResMut<Assets<Mesh>>,
     mats: Res<Materials>,
+    mut arm: Local<Option<Vec<(Mat, Handle<Mesh>)>>>,
 ) {
     let full = !ents.initialized || ents.generation != grid.generation;
     let mut todo: HashSet<IVec2> = HashSet::new();
@@ -211,8 +212,10 @@ fn sync_tiles(
         ents.initialized = true;
     }
     todo.extend(grid.dirty_tiles.drain(..));
-    let arm = gate_arm_mesh().build();
-    let arm = meshes.add(arm);
+    if todo.is_empty() {
+        return;
+    }
+    let arm = arm.get_or_insert_with(|| meshes_of(&mut meshes, gate_arm_mesh())).clone();
     for t in todo {
         if let Some(e) = ents.tiles.remove(&t) {
             commands.entity(e).despawn();
@@ -221,21 +224,17 @@ fn sync_tiles(
         if mb.is_empty() {
             continue;
         }
-        let e = commands
-            .spawn((Mesh3d(meshes.add(mb.build())), MeshMaterial3d(mats.vertex.clone()), Transform::from_translation(tile_center(t))))
-            .id();
+        let e = spawn_geo(&mut commands, &mut meshes, &mats, mb, Transform::from_translation(tile_center(t)));
         if let Some(tr) = grid.track(t) {
             if tr.kind == TrackKind::LevelCrossing {
                 let rq = rot_quat(tr.rot);
                 let y0 = tr.level as f32 * LEVEL_H;
                 for (x, z, yaw) in [(0.32f32, 0.38f32, std::f32::consts::PI), (-0.32, -0.38, 0.0)] {
                     let base = rq * Quat::from_rotation_y(yaw);
-                    commands.entity(e).with_child((
-                        Mesh3d(arm.clone()),
-                        MeshMaterial3d(mats.vertex.clone()),
-                        Transform::from_translation(rq * Vec3::new(x, y0 + 0.24, z)).with_rotation(base),
-                        GateArm { tile: t, base, open: 1.0 },
-                    ));
+                    let tf = Transform::from_translation(rq * Vec3::new(x, y0 + 0.24, z)).with_rotation(base);
+                    let a = spawn_parts(&mut commands, &mats, &arm, tf);
+                    commands.entity(a).insert(GateArm { tile: t, base, open: 1.0 });
+                    commands.entity(e).add_child(a);
                 }
             }
         }

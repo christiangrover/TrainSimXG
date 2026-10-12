@@ -131,10 +131,8 @@ fn track_mesh(mb: &mut Geo, grid: &Grid, t: IVec2, tr: &Track, height: i32) {
                 for r in [FRAC_PI_4, -FRAC_PI_4] {
                     s.cuboid(Vec3::new(x, 0.33, z), Vec3::new(0.06, 0.01, 0.003), Quat::from_rotation_z(r) * Quat::from_rotation_y(FRAC_PI_2), WHITE);
                 }
-                s.aabb(Vec3::new(x - 0.04, 0.2, z - 0.01), Vec3::new(x + 0.04, 0.215, z + 0.01), DARK);
-                for d in [-0.03f32, 0.03] {
-                    s.cuboid(Vec3::new(x + d, 0.225, z), Vec3::new(0.012, 0.012, 0.012), Quat::IDENTITY, Color::srgb(0.85, 0.1, 0.08));
-                }
+                // Lamp bar; the two flashing lamps themselves are separate entities.
+                s.aabb(Vec3::new(x - 0.045, 0.2, z - 0.006), Vec3::new(x + 0.045, 0.21, z + 0.006), DARK);
             }
             mb.append(s, Transform::from_xyz(0.0, y0, 0.0).with_rotation(rq));
         }
@@ -229,6 +227,7 @@ fn road_mesh(mb: &mut Geo, edges: &[u8], y: f32) {
             mb.cuboid(Vec3::new(c.x, y + h, c.y), half, Quat::IDENTITY, Color::srgb(0.95, 0.85, 0.3));
         }
     }
+    signal_poles(mb, edges, y);
     // Stop lines and zebra crossing at junctions.
     if edges.len() >= 3 {
         for &e in edges {
@@ -239,6 +238,53 @@ fn road_mesh(mb: &mut Geo, edges: &[u8], y: f32) {
                 let half = if d.x != 0.0 { Vec3::new(0.05, 0.002, 0.03) } else { Vec3::new(0.03, 0.002, 0.05) };
                 mb.cuboid(Vec3::new(c.x, y + h, c.y), half, Quat::IDENTITY, WHITE);
             }
+        }
+    }
+}
+
+/// Where a level crossing's flashing lamps are (base orientation, track along Z).
+pub const CROSSING_LAMPS: [Vec3; 4] = [
+    Vec3::new(0.29, 0.225, 0.38),
+    Vec3::new(0.35, 0.225, 0.38),
+    Vec3::new(-0.35, 0.225, -0.38),
+    Vec3::new(-0.29, 0.225, -0.38),
+];
+
+/// Traffic signals at a road junction: for each approach edge, the centre of
+/// its lamp head (tile-local, above the road surface) and the way it faces.
+pub fn signal_heads(edges: &[u8]) -> Vec<(u8, Vec3, Vec3)> {
+    if edges.len() < 3 {
+        return vec![];
+    }
+    edges
+        .iter()
+        .map(|&e| {
+            let out = edge_dir(e).as_vec2();
+            let out = Vec3::new(out.x, 0.0, out.y);
+            // On the corner to the right of traffic driving in through this edge.
+            let inward = -out;
+            let right = Vec3::new(-inward.z, 0.0, inward.x);
+            (e, out * 0.4 + right * 0.4 + Vec3::Y * 0.3, out)
+        })
+        .collect()
+}
+
+/// Lamp positions in a signal head (red, yellow, green from the top).
+pub fn signal_lamps(head: Vec3, facing: Vec3) -> [Vec3; 3] {
+    let front = head + facing * 0.022;
+    [front + Vec3::Y * 0.045, front, front - Vec3::Y * 0.045]
+}
+
+fn signal_poles(mb: &mut Geo, edges: &[u8], y: f32) {
+    for (_, head, facing) in signal_heads(edges) {
+        let base = Vec3::new(head.x, y, head.z);
+        mb.mat(Mat::Steel);
+        mb.cylinder(base + Vec3::Y * 0.16, 0.01, 0.16, 8, Quat::IDENTITY, Color::srgb(0.25, 0.25, 0.27));
+        mb.mat(Mat::Paint);
+        mb.cuboid(base + Vec3::Y * head.y, Vec3::new(0.034, 0.078, 0.03), basis_from_dir(facing), Color::srgb(0.12, 0.12, 0.12));
+        // Little visors over each lamp.
+        for p in signal_lamps(head, facing) {
+            mb.cuboid(Vec3::new(p.x, y + p.y + 0.017, p.z) + facing * 0.01, Vec3::new(0.02, 0.003, 0.012), basis_from_dir(facing), Color::srgb(0.1, 0.1, 0.1));
         }
     }
 }

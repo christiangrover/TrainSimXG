@@ -210,8 +210,8 @@ impl Train {
         if self.fuel <= 0.0 {
             return false;
         }
-        self.fuel = (self.fuel - 0.015).max(0.0);
-        self.fire = (self.fire + 0.1).min(1.15);
+        self.fuel = (self.fuel - 0.01).max(0.0);
+        self.fire = (self.fire + 0.12).min(1.15);
         true
     }
 
@@ -226,10 +226,10 @@ impl Train {
         }
         match self.power_kind() {
             Power::Steam => {
-                self.fire = (self.fire - dt * (0.004 + 0.02 * work)).max(0.0);
+                self.fire = (self.fire - dt * (0.0015 + 0.007 * work)).max(0.0);
                 let target = if self.water > 0.0 { self.fire.min(1.0) } else { 0.0 };
                 self.pressure += (target - self.pressure) * (0.5 * dt).min(1.0);
-                self.water = (self.water - dt * (0.0005 + 0.003 * work)).max(0.0);
+                self.water = (self.water - dt * (0.0003 + 0.0015 * work)).max(0.0);
                 // Self-driving trains have their own fireman.
                 if !self.manual {
                     self.stoke_timer -= dt;
@@ -240,7 +240,7 @@ impl Train {
                 }
             }
             Power::Diesel => {
-                self.fuel = (self.fuel - dt * (0.001 + 0.005 * work)).max(0.0);
+                self.fuel = (self.fuel - dt * (0.0004 + 0.002 * work)).max(0.0);
                 self.pressure = 1.0;
             }
             Power::None => {}

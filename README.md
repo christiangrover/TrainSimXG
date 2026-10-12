@@ -19,7 +19,7 @@ The game opens with a demo layout. **New… → Yes, clear** gives you an empty 
 | 4 | Passenger | right-drag look, Tab next car, V other side's window |
 | 5 | Engineer | Drive from the cab: W/S throttle (below STOP is reverse), X shut off, hold Space to brake, E emergency brake, H horn. Or use the throttle and brake levers and the buttons on the control desk. |
 | 6 | Fireman | Stand on a steam engine's footplate. Press Space (or SHOVEL COAL) to throw coal into the firebox and keep the steam needle in the green. |
-| 7 | Crane | Drive the port crane: A/D swing, W/S trolley out and in, R/F hook up and down, Space grab or drop, Tab switches between the hook (logs) and the grab bucket (rocks), C next crane. |
+| 7 | Crane | Drive the port crane: A/D swing, W/S trolley out and in, R/F hook up and down, Space grab or drop, Tab switches between the hook (logs) and the grab bucket (rocks), C next crane. A green ring or box shows when you can grab or drop, yellow means lower it more, red means the wrong tool or car. |
 
 T cycles through the trains. You can also pick one in the right-hand panel. H sounds the horn (or the whistle on a steam engine) from any train view.
 
@@ -46,7 +46,7 @@ Choose a tool in the left toolbox, then left-click on the table. Drag to paint r
 - **R** rotates the piece. A cyan preview shows the rails before you place them.
 - **[ ]** changes the brush size for terrain tools. **Esc** goes back to the Select tool.
 - **Track:** straight, curve, left and right switches, diamond crossing, ramp, station, and road crossing (road crossings have gates that lower when a train comes).
-- **Heights:** new track automatically matches the height of the track next to it. A ramp climbs one level toward its arrow. Use *Raise track* and *Lower track* to adjust a placed piece.
+- **Heights:** new track automatically matches the height of the track next to it. A ramp climbs one level toward its arrow. Use *Raise track* and *Lower track* to adjust a placed piece: the straight track on either side turns into ramps by itself, one level per tile, so trains can still get through. Raise the pieces next to it too, or drag the tool along the line, to build a long, flat bridge; a sloping piece levels off instead of making a peak. Curves, switches and stations can't slope, so leave straight track around the piece you raise.
   - Track above the ground is drawn as a **bridge** with piers.
   - Track below the ground is a **tunnel**, with stone portals where it comes out.
 - **Switches:** click one with the Select tool to flip it. Green means straight, orange means diverging.
@@ -54,7 +54,8 @@ Choose a tool in the left toolbox, then left-click on the table. Drag to paint r
   - **Engines:** a steam engine, a diesel road engine and a diesel streamliner. Steam engines puff white smoke; diesels give dark exhaust, heaviest when pulling away.
   - **Cars:** coal tender, passenger, sleeper, dining, boxcar, tanker, coal hopper, log car and caboose.
 - **Auto trains** cruise, stop at stations, wait for trains ahead, and reverse at the end of the line. **Manual trains** are driven with the throttle, either from the panel or from the engineer's view.
-- **Road traffic:** cars, vans, trucks and buses drive on every road. They keep a safe gap, take turns at junctions, and wait at closed crossing gates. Set how many with the slider.
+- **Road traffic:** cars, vans, trucks and buses drive on every road. They keep a safe gap, stop at red traffic lights, never block a junction, and wait at closed crossing gates. Set how many with the slider.
+- **Traffic lights** appear by themselves at every road junction. **Level crossings** flash their red lights and ring a bell (when you're nearby) while the gates are down.
 - **Emergency services:** a *Police station* sends out 2 police cars, a *Hospital* 2 ambulances, and a *Fire station* a fire engine, onto the nearby roads. Now and then they go out on a call, with flashing light bars and a faster speed. Remove the building and its vehicles go too.
 
 ## Saving

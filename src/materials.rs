@@ -8,12 +8,26 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use std::collections::HashMap;
 
+/// Signal lamp colours (traffic lights and crossing lights).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Lamp {
+    Red,
+    Yellow,
+    Green,
+}
+
 #[derive(Resource)]
 pub struct Materials {
     map: HashMap<Mat, Handle<StandardMaterial>>,
+    lamps: HashMap<(Lamp, bool), Handle<StandardMaterial>>,
 }
 
 impl Materials {
+    /// A signal lamp, lit or dark.
+    pub fn lamp(&self, lamp: Lamp, on: bool) -> Handle<StandardMaterial> {
+        self.lamps[&(lamp, on)].clone()
+    }
+
     pub fn get(&self, m: Mat) -> Handle<StandardMaterial> {
         self.map[&m].clone()
     }
@@ -155,7 +169,14 @@ pub fn create(images: &mut Assets<Image>, mats: &mut Assets<StandardMaterial>) -
         }
         map.insert(m, mats.add(sm));
     }
-    Materials { map }
+    let mut lamps = HashMap::new();
+    for (lamp, (r, g, b)) in [(Lamp::Red, (1.0, 0.08, 0.05)), (Lamp::Yellow, (1.0, 0.65, 0.05)), (Lamp::Green, (0.1, 1.0, 0.3))] {
+        let lit = StandardMaterial { base_color: Color::srgb(r, g, b), emissive: LinearRgba::rgb(r * 12.0, g * 12.0, b * 12.0), ..default() };
+        let dark = StandardMaterial { base_color: Color::srgb(r * 0.18, g * 0.18, b * 0.18), perceptual_roughness: 0.3, ..default() };
+        lamps.insert((lamp, true), mats.add(lit));
+        lamps.insert((lamp, false), mats.add(dark));
+    }
+    Materials { map, lamps }
 }
 
 /// Spawns a multi-material model as a parent entity with one child per material.

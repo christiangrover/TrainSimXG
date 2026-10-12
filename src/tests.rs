@@ -148,8 +148,8 @@ fn steam_needs_stoking_on_manual_fuel() {
     t.fuel_manual = true;
     t.throttle = 1.0;
     assert!(t.power() > 0.9);
-    // Run a couple of minutes without shovelling: the fire dies, the steam goes.
-    for _ in 0..(120 * 20) {
+    // Run a few minutes without shovelling: the fire dies, the steam goes.
+    for _ in 0..(180 * 20) {
         t.speed = 1.0;
         crate::trains::burn_for_test(t, 0.05);
     }
@@ -176,7 +176,11 @@ fn diesel_runs_dry_and_auto_fuel_never_does() {
     }
     assert_eq!(t.power(), 1.0, "auto fuel never runs out");
     t.fuel_manual = true;
-    for _ in 0..(200 * 20) {
+    for _ in 0..(300 * 20) {
+        crate::trains::burn_for_test(t, 0.05);
+    }
+    assert!(t.fuel > 0.0, "a full tank lasts more than 5 minutes flat out");
+    for _ in 0..(300 * 20) {
         crate::trains::burn_for_test(t, 0.05);
     }
     assert_eq!(t.fuel, 0.0);
@@ -193,4 +197,52 @@ fn cars_only_take_the_right_cargo() {
     assert!(!t.cars[1].load(CargoKind::Rocks, 0.1), "a full hopper takes no more");
     assert!(t.cars[2].load(CargoKind::Oil, 0.3));
     assert!(!t.cars[2].load(CargoKind::Water, 0.3), "can't mix water into oil");
+}
+#[test]
+fn raising_track_makes_a_smooth_slope() {
+    let mut g = Grid::default();
+    for x in 0..12 {
+        put(&mut g, x, 5, TrackKind::Straight, 1, 0);
+    }
+    // Raise the middle piece three times, smoothing after each, like the tool does.
+    for _ in 0..3 {
+        g.edit(IVec2::new(6, 5)).unwrap().track_mut().unwrap().level += 1;
+        assert!(smooth_levels(&mut g, IVec2::new(6, 5)).is_empty());
+    }
+    let levels: Vec<i32> = (0..12).map(|x| g.track(IVec2::new(x, 5)).unwrap().max_level()).collect();
+    assert_eq!(levels, vec![0, 0, 0, 1, 2, 3, 3, 3, 2, 1, 0, 0]);
+    // A train can run the whole way over the hump and back down.
+    let mut p = TrackPos { tile: IVec2::new(0, 5), entry: W, exit: E, t: 0.0 };
+    let moved = p.advance(&g, 11.5);
+    assert!((moved - 11.5).abs() < 1e-3, "blocked after {moved}");
+    // Lowering it again flattens the line.
+    for _ in 0..3 {
+        g.edit(IVec2::new(6, 5)).unwrap().track_mut().unwrap().level -= 1;
+        smooth_levels(&mut g, IVec2::new(6, 5));
+    }
+    assert!((0..12).all(|x| g.track(IVec2::new(x, 5)).unwrap().kind == TrackKind::Straight && g.track(IVec2::new(x, 5)).unwrap().level == 0));
+}
+#[test]
+fn raising_pieces_side_by_side_builds_a_flat_bridge() {
+    let mut g = Grid::default();
+    for x in 0..14 {
+        put(&mut g, x, 5, TrackKind::Straight, 1, 0);
+    }
+    // Raise tiles 5..=8 twice each, one after another, like dragging the tool along.
+    let raise = |g: &mut Grid, x: i32| {
+        crate::build::raise_piece(g.edit(IVec2::new(x, 5)).unwrap().track_mut().unwrap(), true);
+        smooth_levels(g, IVec2::new(x, 5));
+    };
+    for _ in 0..2 {
+        for x in 5..=8 {
+            raise(&mut g, x);
+        }
+    }
+    let tops: Vec<i32> = (0..14).map(|x| g.track(IVec2::new(x, 5)).unwrap().max_level()).collect();
+    assert_eq!(&tops[5..=8], &[2, 2, 2, 2], "a flat bridge, not pinnacles: {tops:?}");
+    for x in 5..=8 {
+        assert_eq!(g.track(IVec2::new(x, 5)).unwrap().kind, TrackKind::Straight);
+    }
+    let mut p = TrackPos { tile: IVec2::new(0, 5), entry: W, exit: E, t: 0.0 };
+    assert!((p.advance(&g, 13.5) - 13.5).abs() < 1e-3, "a train gets over the bridge");
 }

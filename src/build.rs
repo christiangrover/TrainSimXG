@@ -50,7 +50,7 @@ impl Tool {
         }
     }
     fn drags(self) -> bool {
-        matches!(self, Tool::Road | Tool::Decor(_) | Tool::Raise | Tool::Lower | Tool::Flatten | Tool::Paint(_) | Tool::Bulldoze | Tool::Track(TrackKind::Straight))
+        matches!(self, Tool::Road | Tool::Decor(_) | Tool::Raise | Tool::Lower | Tool::Flatten | Tool::Paint(_) | Tool::Bulldoze | Tool::Track(TrackKind::Straight) | Tool::TrackUp | Tool::TrackDown)
     }
     fn uses_brush(self) -> bool {
         matches!(self, Tool::Raise | Tool::Lower | Tool::Flatten | Tool::Paint(_))
@@ -137,6 +137,19 @@ fn auto_level(grid: &Grid, t: IVec2, piece: &Track) -> i32 {
     grid.height(t)
 }
 
+/// Raises or lowers one piece of track by a level. A ramp (part of a slope)
+/// levels off instead, at its high end when raising and its low end when
+/// lowering, so raising pieces side by side builds a flat bridge.
+pub fn raise_piece(x: &mut Track, up: bool) {
+    if x.kind == TrackKind::Ramp {
+        let level = if up { x.level + 1 } else { x.level };
+        *x = Track::new(TrackKind::Straight, x.rot % 2, level);
+    } else if up {
+        x.level = (x.level + 1).min(MAX_LEVEL - 1);
+    } else {
+        x.level = (x.level - 1).max(0);
+    }
+}
 fn use_tool(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -244,6 +257,8 @@ fn use_tool(
             if let Some(x) = grid.edit(t) {
                 x.content = Content::Track(piece);
             }
+            // Joining track at two different heights: slope the straight track between.
+            smooth_levels(&mut grid, t);
         }
         Tool::Road => {
             if grid.get(t).map(|x| x.ground == Ground::Water).unwrap_or(true) {
@@ -307,7 +322,11 @@ fn use_tool(
         }
         Tool::TrackUp | Tool::TrackDown => {
             if let Some(x) = grid.edit(t).and_then(|x| x.track_mut()) {
-                x.level = if tool == Tool::TrackUp { (x.level + 1).min(MAX_LEVEL - 1) } else { (x.level - 1).max(0) };
+                raise_piece(x, tool == Tool::TrackUp);
+                // Slope the track on either side so trains can still get through.
+                if !smooth_levels(&mut grid, t).is_empty() {
+                    toast.show("Couldn't slope the track at a curve, switch or station - put straight track next to the piece you raise.");
+                }
             } else {
                 toast.show("Click on a track piece to raise or lower it.");
             }

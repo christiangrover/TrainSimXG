@@ -10,6 +10,7 @@ use crate::models_tile::*;
 use crate::models_vehicle::CarKind;
 use crate::services::{CraneBusy, Depots};
 use crate::sounds::{SoundQueue, Sfx};
+use crate::track::RAIL_Y;
 use crate::trains::*;
 use crate::ui::UiCapture;
 use bevy::prelude::*;
@@ -22,7 +23,8 @@ impl Plugin for CranePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Cranes>()
             .init_resource::<CraneInput>()
-            .add_systems(Update, (sync_cranes, operate_cranes, place_crane_parts).chain().after(crate::services::find_depots));
+            .add_systems(Startup, thicker_lines)
+            .add_systems(Update, (sync_cranes, operate_cranes, place_crane_parts, crane_highlights).chain().after(crate::services::find_depots));
     }
 }
 
@@ -71,6 +73,10 @@ pub struct CraneState {
     pub carrying: Option<CargoKind>,
     /// A short message for the crane driver.
     pub message: String,
+    /// What the crane can do right now (for highlights and the controls).
+    pub hint: Hint,
+    last_message: String,
+    message_age: f32,
     step: Step,
     target: Option<(u32, usize)>,
     think: f32,
@@ -138,15 +144,20 @@ fn approach_angle(v: &mut f32, goal: f32, rate: f32) -> bool {
     d.abs() < 0.01
 }
 
-/// The car (train id, index) hanging under the hook, if any, and its height.
-fn car_under(grid: &Grid, trains: &Trains, hook: Vec3) -> Option<(u32, usize, f32)> {
+/// Height of a car's top above its rail-top origin.
+const CAR_TOP: f32 = 0.41;
+/// Height of the cargo piles above the quay.
+const PILE_TOP: f32 = 0.2;
+
+/// The car (train id, index) under a point, if any, and its rail height.
+fn car_under(grid: &Grid, trains: &Trains, p: Vec3) -> Option<(u32, usize, f32)> {
     for t in &trains.list {
         for (i, c) in t.cars.iter().enumerate() {
             let tf = car_transform(grid, c);
-            let d = hook - tf.translation;
+            let d = (p - tf.translation).with_y(0.0);
             let fwd = tf.rotation * Vec3::Z;
-            let along = d.with_y(0.0).dot(fwd).abs();
-            let side = (d.with_y(0.0) - fwd * d.with_y(0.0).dot(fwd)).length();
+            let along = d.dot(fwd).abs();
+            let side = (d - fwd * d.dot(fwd)).length();
             if along < 0.36 && side < 0.17 {
                 return Some((t.id, i, tf.translation.y));
             }
@@ -155,63 +166,160 @@ fn car_under(grid: &Grid, trains: &Trains, hook: Vec3) -> Option<(u32, usize, f3
     None
 }
 
+/// How far below the cable's end the hook or bucket (and its load) hangs.
+fn hang(c: &CraneState) -> f32 {
+    match (c.tool, c.carrying) {
+        (_, Some(CargoKind::Logs)) => 0.36,
+        (Tool::Bucket, _) => 0.17,
+        _ => 0.11,
+    }
+}
+
+/// The lowest the hook may go (above the quay), so it never sinks into the
+/// ground, the track, a car or a pile.
+pub fn min_hook(grid: &Grid, trains: &Trains, c: &CraneState) -> f32 {
+    let (o, _) = crane_frame(grid, c.tile);
+    let p = o + dir(c.yaw) * c.reach;
+    let t = world_to_tile(p);
+    let mut floor = grid
+        .get(t)
+        .map(|x| {
+            let mut y = x.surface_y();
+            if let Some(tr) = x.track() {
+                y = y.max(tr.max_level() as f32 * LEVEL_H + RAIL_Y);
+            }
+            y
+        })
+        .unwrap_or(0.0);
+    if t == c.tile {
+        floor = floor.max(o.y);
+    }
+    if let Some((_, _, cy)) = car_under(grid, trains, p) {
+        floor = floor.max(cy + CAR_TOP);
+    }
+    for kind in [CargoKind::Logs, CargoKind::Rocks] {
+        let pile = pile_world(grid, c.tile, kind);
+        if Vec2::new(p.x - pile.x, p.z - pile.z).length() < 0.2 {
+            floor = floor.max(o.y + PILE_TOP - 0.08);
+        }
+    }
+    floor - o.y + hang(c)
+}
+
+/// What the crane can do right where the hook is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Hint {
+    #[default]
+    Nothing,
+    /// Over the right pile but not low enough yet.
+    LowerToGrab,
+    CanGrab,
+    /// Over the pile the other tool is for.
+    WrongTool,
+    /// Over a car that takes this load, but still too high.
+    LowerToDrop(u32, usize),
+    CanDrop(u32, usize),
+    WrongCar(u32, usize),
+    CarFull(u32, usize),
+    OverPile,
+}
+
+pub fn hint(grid: &Grid, trains: &Trains, c: &CraneState) -> Hint {
+    let (o, _) = crane_frame(grid, c.tile);
+    let hook = hook_world(grid, c);
+    let bottom = hook.y - hang(c);
+    let near = |p: Vec3, r: f32| Vec2::new(hook.x - p.x, hook.z - p.z).length() < r;
+    match c.carrying {
+        None => {
+            let kind = c.tool.cargo();
+            let other = if kind == CargoKind::Logs { CargoKind::Rocks } else { CargoKind::Logs };
+            if near(pile_world(grid, c.tile, kind), 0.25) {
+                if bottom - o.y < PILE_TOP + 0.1 {
+                    Hint::CanGrab
+                } else {
+                    Hint::LowerToGrab
+                }
+            } else if near(pile_world(grid, c.tile, other), 0.25) {
+                Hint::WrongTool
+            } else {
+                Hint::Nothing
+            }
+        }
+        Some(kind) => {
+            if let Some((id, i, cy)) = car_under(grid, trains, hook) {
+                let car = &trains.get(id).unwrap().cars[i];
+                let fits = matches!((car.kind, kind), (CarKind::LogCar, CargoKind::Logs) | (CarKind::Hopper, CargoKind::Rocks));
+                if !fits {
+                    Hint::WrongCar(id, i)
+                } else if !car.can_take(kind) {
+                    Hint::CarFull(id, i)
+                } else if bottom - (cy + CAR_TOP) < 0.12 {
+                    Hint::CanDrop(id, i)
+                } else {
+                    Hint::LowerToDrop(id, i)
+                }
+            } else if near(pile_world(grid, c.tile, kind), 0.3) {
+                Hint::OverPile
+            } else {
+                Hint::Nothing
+            }
+        }
+    }
+}
+
 /// Lets go of whatever the crane carries: onto a car, back on the pile, or (oops) on the ground.
 fn release(grid: &Grid, trains: &mut Trains, c: &mut CraneState, sounds: &mut SoundQueue) {
     let Some(kind) = c.carrying else { return };
-    let hook = hook_world(grid, c);
     let amount = if kind == CargoKind::Logs { LOG_LOAD } else { ROCK_LOAD };
-    if let Some((id, i, y)) = car_under(grid, trains, hook) {
-        if hook.y - y < 0.75 {
-            let car = &mut trains.get_mut(id).unwrap().cars[i];
-            if car.load(kind, amount) {
-                c.message = format!("Loaded {}!", kind.label());
-                c.carrying = None;
-                sounds.play(Sfx::Thud, 0.8);
-                return;
-            }
-            c.message = match car.kind {
-                CarKind::LogCar if kind == CargoKind::Rocks => "Rocks go in the hopper, not the log car!".into(),
-                CarKind::Hopper if kind == CargoKind::Logs => "Logs go on the log car, not the hopper!".into(),
-                CarKind::LogCar | CarKind::Hopper => "That car is full!".into(),
-                _ => format!("That car can't carry {}.", kind.label()),
-            };
-            return;
+    match hint(grid, trains, c) {
+        Hint::CanDrop(id, i) => {
+            trains.get_mut(id).unwrap().cars[i].load(kind, amount);
+            c.message = format!("Loaded {}!", kind.label());
+            c.carrying = None;
+            sounds.play(Sfx::Thud, 0.8);
         }
-        c.message = "Lower it down onto the car first.".into();
-        return;
+        Hint::LowerToDrop(..) => c.message = "Lower it down onto the car first (F).".into(),
+        Hint::WrongCar(..) => {
+            c.message = if kind == CargoKind::Rocks { "Rocks go in a hopper car!".into() } else { "Logs go on a log car!".into() };
+        }
+        Hint::CarFull(..) => c.message = "That car is full!".into(),
+        Hint::OverPile => {
+            c.message = format!("Put the {} back on the pile.", kind.label());
+            c.carrying = None;
+            sounds.play(Sfx::Clank, 0.5);
+        }
+        _ => {
+            c.message = format!("Oops - dropped the {}!", kind.label());
+            c.carrying = None;
+            sounds.play(Sfx::Thud, 0.7);
+        }
     }
-    let pile = pile_world(grid, c.tile, kind);
-    if Vec2::new(hook.x - pile.x, hook.z - pile.z).length() < 0.3 {
-        c.message = format!("Put the {} back on the pile.", kind.label());
-        sounds.play(Sfx::Clank, 0.5);
-    } else {
-        c.message = format!("Oops - dropped the {}!", kind.label());
-        sounds.play(Sfx::Thud, 0.7);
-    }
-    c.carrying = None;
 }
 
 /// Picks up from the pile under the hook, if the right tool is fitted and it's low enough.
-fn grab(grid: &Grid, c: &mut CraneState, sounds: &mut SoundQueue) -> bool {
+fn grab(grid: &Grid, trains: &Trains, c: &mut CraneState, sounds: &mut SoundQueue) -> bool {
     let kind = c.tool.cargo();
-    let hook = hook_world(grid, c);
-    let pile = pile_world(grid, c.tile, kind);
-    let close = Vec2::new(hook.x - pile.x, hook.z - pile.z).length() < 0.25;
-    if close && c.hook < 0.4 {
-        c.carrying = Some(kind);
-        c.message = format!("Got some {}! Now swing over a car.", kind.label());
-        sounds.play(Sfx::Clank, 0.6);
-        return true;
+    match hint(grid, trains, c) {
+        Hint::CanGrab => {
+            c.carrying = Some(kind);
+            c.message = format!("Got some {}! Now swing over a car.", kind.label());
+            sounds.play(Sfx::Clank, 0.6);
+            return true;
+        }
+        Hint::LowerToGrab => c.message = "Lower the hook further (F).".into(),
+        Hint::WrongTool => c.message = format!("Switch to the {} for that pile (Tab).", if kind == CargoKind::Logs { "bucket" } else { "hook" }),
+        _ => c.message = format!("Swing the hook over the {} pile.", kind.label()),
     }
-    let other = pile_world(grid, c.tile, if kind == CargoKind::Logs { CargoKind::Rocks } else { CargoKind::Logs });
-    c.message = if Vec2::new(hook.x - other.x, hook.z - other.z).length() < 0.25 {
-        format!("Switch to the {} for that pile (Tab).", if kind == CargoKind::Logs { "bucket" } else { "hook" })
-    } else if close {
-        "Lower the hook further (F).".into()
-    } else {
-        format!("Swing the hook over the {} pile.", kind.label())
-    };
     false
+}
+/// Swings the jib and runs the trolley so the hook is over a point (used by the screenshot tour).
+pub fn point_at(grid: &Grid, c: &mut CraneState, p: Vec3) {
+    let (o, _) = crane_frame(grid, c.tile);
+    (c.yaw, c.reach) = aim(o, p);
+}
+
+pub fn log_pile_pos(grid: &Grid, c: &CraneState) -> Vec3 {
+    pile_world(grid, c.tile, CargoKind::Logs)
 }
 
 pub fn crane_eye(grid: &Grid, c: &CraneState) -> (Vec3, Vec3) {
@@ -238,6 +346,9 @@ fn sync_cranes(depots: Res<Depots>, grid: Res<Grid>, mut cranes: ResMut<Cranes>)
                 tool: Tool::Hook,
                 carrying: None,
                 message: String::new(),
+                hint: Hint::Nothing,
+                last_message: String::new(),
+                message_age: 0.0,
                 step: Step::Idle,
                 target: None,
                 think: 0.0,
@@ -283,6 +394,17 @@ fn operate_cranes(
     let tiles: Vec<IVec2> = cranes.map.keys().copied().collect();
     for t in tiles {
         let c = cranes.map.get_mut(&t).unwrap();
+        // Messages fade after a few seconds.
+        if c.message != c.last_message {
+            c.last_message = c.message.clone();
+            c.message_age = 0.0;
+        } else {
+            c.message_age += dt;
+            if c.message_age > 4.0 && !c.message.is_empty() {
+                c.message.clear();
+                c.last_message.clear();
+            }
+        }
         let (origin, _) = crane_frame(&grid, t);
         if driving == Some(t) {
             // The player is at the controls.
@@ -290,7 +412,10 @@ fn operate_cranes(
             c.target = None;
             c.yaw = wrap(c.yaw + input.turn.clamp(-1.0, 1.0) * 1.0 * dt);
             c.reach = (c.reach + input.reach.clamp(-1.0, 1.0) * 0.7 * dt).clamp(MIN_REACH, MAX_REACH);
-            c.hook = (c.hook + input.hoist.clamp(-1.0, 1.0) * 0.6 * dt).clamp(0.02, MAX_HOOK);
+            c.hook = (c.hook + input.hoist.clamp(-1.0, 1.0) * 0.6 * dt).min(MAX_HOOK);
+            // The hook stops at the ground, the track, car tops and the piles.
+            let lo = min_hook(&grid, &trains, c);
+            c.hook = c.hook.clamp(lo.min(MAX_HOOK), MAX_HOOK);
             if input.switch_tool {
                 if c.carrying.is_some() {
                     c.message = "Put the load down before changing tools.".into();
@@ -304,9 +429,10 @@ fn operate_cranes(
                 if c.carrying.is_some() {
                     release(&grid, &mut trains, c, &mut sounds);
                 } else {
-                    grab(&grid, c, &mut sounds);
+                    grab(&grid, &trains, c, &mut sounds);
                 }
             }
+            c.hint = hint(&grid, &trains, c);
             continue;
         }
         if !sim.running {
@@ -314,6 +440,7 @@ fn operate_cranes(
         }
         // Automatic operation: find a stopped car that needs logs or rocks.
         let rate = TRAVEL * dt;
+        let lo = min_hook(&grid, &trains, c);
         if let Some((id, _)) = c.target {
             busy.0.insert(id);
         }
@@ -365,14 +492,14 @@ fn operate_cranes(
                 }
             }
             Step::LowerPile => {
-                if approach(&mut c.hook, 0.15, rate) {
+                if approach(&mut c.hook, lo, rate) {
                     if c.carrying.is_some() {
                         // Taking an unwanted load back.
                         c.carrying = None;
                         sounds.play(Sfx::Clank, 0.3);
                         c.step = Step::Idle;
                     } else {
-                        grab(&grid, c, &mut sounds);
+                        grab(&grid, &trains, c, &mut sounds);
                         c.step = Step::RaisePile;
                     }
                 }
@@ -397,8 +524,8 @@ fn operate_cranes(
                 }
             },
             Step::LowerCar => match target_pos {
-                Some(p) => {
-                    if approach(&mut c.hook, p.y - origin.y + 0.5, rate) {
+                Some(_) => {
+                    if approach(&mut c.hook, lo, rate) {
                         release(&grid, &mut trains, c, &mut sounds);
                         c.step = Step::RaiseCar;
                     }
@@ -415,10 +542,87 @@ fn operate_cranes(
                 }
             }
         }
+        // Never through the ground, even while swinging round.
+        let lo = min_hook(&grid, &trains, c);
+        c.hook = c.hook.max(lo.min(MAX_HOOK));
+        c.hint = Hint::Nothing;
     }
     *input = CraneInput::default();
 }
 
+fn thicker_lines(mut store: ResMut<GizmoConfigStore>) {
+    let (config, _) = store.config_mut::<DefaultGizmoConfigGroup>();
+    config.line.width = 4.0;
+    // Draw a touch in front of things so outlines aren't hidden by what they surround.
+    config.depth_bias = -0.1;
+}
+
+/// Shows the crane driver what they can do: a ring on the pile they can grab
+/// from, a box around the car they can drop onto, and a line straight down.
+fn crane_highlights(time: Res<Time>, cam: Res<CamState>, grid: Res<Grid>, trains: Res<Trains>, cranes: Res<Cranes>, mut gizmos: Gizmos) {
+    if cam.mode != CamMode::Crane {
+        return;
+    }
+    let Some(c) = cranes.active.and_then(|t| cranes.map.get(&t)) else { return };
+    let pulse = 0.55 + 0.45 * (time.elapsed_secs() * 7.0).sin().abs();
+    let green = Color::srgb(0.2 * pulse, 1.0 * pulse, 0.3 * pulse);
+    let yellow = Color::srgb(1.0, 0.85, 0.1);
+    let red = Color::srgb(1.0, 0.25, 0.2);
+    let guide = Color::srgba(1.0, 1.0, 1.0, 0.6);
+    let flat = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+    let ring = |g: &mut Gizmos, kind: CargoKind, col: Color| {
+        let p = pile_world(&grid, c.tile, kind);
+        for (k, y) in [0.02f32, PILE_TOP + 0.03].iter().enumerate() {
+            g.circle(Isometry3d::new(p + Vec3::Y * *y, flat), 0.26 - k as f32 * 0.06, col);
+        }
+    };
+    let car_box = |g: &mut Gizmos, id: u32, i: usize, col: Color| {
+        if let Some(car) = trains.get(id).and_then(|t| t.cars.get(i)) {
+            let tf = car_transform(&grid, car);
+            g.cuboid(Transform::from_translation(tf.translation + Vec3::Y * 0.22).with_rotation(tf.rotation).with_scale(Vec3::new(0.38, 0.48, 0.92)), col);
+        }
+    };
+    let tool_kind = c.tool.cargo();
+    let other = if tool_kind == CargoKind::Logs { CargoKind::Rocks } else { CargoKind::Logs };
+    match c.hint {
+        Hint::CanGrab => ring(&mut gizmos, tool_kind, green),
+        Hint::LowerToGrab => ring(&mut gizmos, tool_kind, yellow),
+        Hint::WrongTool => ring(&mut gizmos, other, red),
+        Hint::CanDrop(id, i) => car_box(&mut gizmos, id, i, green),
+        Hint::LowerToDrop(id, i) => car_box(&mut gizmos, id, i, yellow),
+        Hint::WrongCar(id, i) | Hint::CarFull(id, i) => car_box(&mut gizmos, id, i, red),
+        Hint::OverPile => ring(&mut gizmos, c.carrying.unwrap_or(tool_kind), yellow),
+        Hint::Nothing => {}
+    }
+    // Faint guides showing where to go next.
+    match c.carrying {
+        None if c.hint == Hint::Nothing => ring(&mut gizmos, tool_kind, guide),
+        Some(kind) if matches!(c.hint, Hint::Nothing | Hint::OverPile) => {
+            let (o, _) = crane_frame(&grid, c.tile);
+            for t in &trains.list {
+                for (i, car) in t.cars.iter().enumerate() {
+                    let p = car_transform(&grid, car).translation;
+                    if car.can_take(kind) && matches!(car.kind, CarKind::LogCar | CarKind::Hopper) && Vec2::new(p.x - o.x, p.z - o.z).length() < MAX_REACH {
+                        car_box(&mut gizmos, t.id, i, guide);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    // A plumb line from the hook straight down, to help line things up.
+    let (o, _) = crane_frame(&grid, c.tile);
+    let hook = hook_world(&grid, c);
+    let bottom = hook - Vec3::Y * hang(c);
+    let floor = o.y + min_hook(&grid, &trains, c) - hang(c);
+    let col = match c.hint {
+        Hint::CanGrab | Hint::CanDrop(..) => green,
+        _ => guide,
+    };
+    let foot = Vec3::new(hook.x, floor + 0.005, hook.z);
+    gizmos.line(bottom, foot, col);
+    gizmos.circle(Isometry3d::new(foot, flat), 0.05, col);
+}
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Part {
     Top,

@@ -17,6 +17,7 @@ pub enum Sfx {
     Shovel,
     Clank,
     Thud,
+    Bell,
 }
 
 #[derive(Resource)]
@@ -131,6 +132,10 @@ fn make_sounds(mut commands: Commands, mut audio: ResMut<Assets<AudioSource>>) {
         s * (-t * 9.0).exp()
     });
     let thud = render(0.4, |t| ((TAU * 70.0 * t).sin() + noise.next() * 0.3) * (-t * 12.0).exp());
+    let bell = render(0.5, |t| {
+        let s: f32 = [1250.0f32, 1890.0, 3150.0].iter().enumerate().map(|(i, f)| (TAU * f * t).sin() / (i + 1) as f32).sum();
+        s * (-t * 7.0).exp() * (t / 0.003).min(1.0)
+    });
     // Exactly 55 cycles of 55 Hz so it loops seamlessly.
     let mut lp3 = 0.0;
     let rumble = render(1.0, |t| {
@@ -146,6 +151,7 @@ fn make_sounds(mut commands: Commands, mut audio: ResMut<Assets<AudioSource>>) {
         (Sfx::Shovel, shovel),
         (Sfx::Clank, clank),
         (Sfx::Thud, thud),
+        (Sfx::Bell, bell),
     ] {
         clips.push((sfx, audio.add(wav(&s))));
     }

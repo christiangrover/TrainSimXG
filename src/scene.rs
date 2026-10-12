@@ -3,7 +3,7 @@
 
 use crate::grid::*;
 use crate::mesh::*;
-use crate::materials::{self, meshes_of, spawn_geo, spawn_parts, Materials};
+use crate::materials::{self, meshes_of, spawn_geo, spawn_parts, Lamp, Materials};
 use crate::models_tile::*;
 use bevy::pbr::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
@@ -29,6 +29,22 @@ pub struct TileEntities {
     chunks: HashMap<IVec2, Entity>,
     generation: u32,
     initialized: bool,
+}
+
+/// One lamp of a traffic signal at a road junction.
+#[derive(Component)]
+pub struct SignalLamp {
+    pub tile: IVec2,
+    /// The edge whose incoming traffic this signal controls.
+    pub edge: u8,
+    pub lamp: Lamp,
+}
+
+/// One of a level crossing's flashing red lamps (`pair` 0 / 1 flash alternately).
+#[derive(Component)]
+pub struct CrossingLamp {
+    pub tile: IVec2,
+    pub pair: usize,
 }
 
 #[derive(Component)]
@@ -193,6 +209,7 @@ fn sync_tiles(
     mut meshes: ResMut<Assets<Mesh>>,
     mats: Res<Materials>,
     mut arm: Local<Option<Vec<(Mat, Handle<Mesh>)>>>,
+    mut bulb: Local<Option<Handle<Mesh>>>,
 ) {
     let full = !ents.initialized || ents.generation != grid.generation;
     let mut todo: HashSet<IVec2> = HashSet::new();
@@ -216,6 +233,7 @@ fn sync_tiles(
         return;
     }
     let arm = arm.get_or_insert_with(|| meshes_of(&mut meshes, gate_arm_mesh())).clone();
+    let bulb = bulb.get_or_insert_with(|| meshes.add(Sphere::new(0.017).mesh().ico(2).unwrap())).clone();
     for t in todo {
         if let Some(e) = ents.tiles.remove(&t) {
             commands.entity(e).despawn();
@@ -235,6 +253,34 @@ fn sync_tiles(
                     let a = spawn_parts(&mut commands, &mats, &arm, tf);
                     commands.entity(a).insert(GateArm { tile: t, base, open: 1.0 });
                     commands.entity(e).add_child(a);
+                }
+                for (i, p) in CROSSING_LAMPS.iter().enumerate() {
+                    let lamp = commands
+                        .spawn((
+                            Mesh3d(bulb.clone()),
+                            MeshMaterial3d(mats.lamp(Lamp::Red, false)),
+                            Transform::from_translation(rq * (*p + Vec3::Y * y0)).with_scale(Vec3::splat(1.3)),
+                            CrossingLamp { tile: t, pair: i % 2 },
+                        ))
+                        .id();
+                    commands.entity(e).add_child(lamp);
+                }
+            }
+        }
+        // Traffic signals at road junctions.
+        if grid.get(t).is_some_and(|x| x.content == Content::Road) {
+            let y = grid.get(t).unwrap().surface_y();
+            for (edge, head, facing) in signal_heads(&grid.road_edges(t)) {
+                for (p, lamp) in signal_lamps(head, facing).into_iter().zip([Lamp::Red, Lamp::Yellow, Lamp::Green]) {
+                    let l = commands
+                        .spawn((
+                            Mesh3d(bulb.clone()),
+                            MeshMaterial3d(mats.lamp(lamp, false)),
+                            Transform::from_translation(p + Vec3::Y * y).with_scale(Vec3::splat(1.2)),
+                            SignalLamp { tile: t, edge, lamp },
+                        ))
+                        .id();
+                    commands.entity(e).add_child(l);
                 }
             }
         }

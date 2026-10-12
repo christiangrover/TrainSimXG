@@ -5,7 +5,9 @@ use crate::grid::*;
 use crate::materials::{meshes_of, spawn_parts, Materials};
 use crate::mesh::*;
 use crate::models_vehicle::{road_vehicle_mesh, RoadStyle};
-use crate::scene::GateArm;
+use crate::materials::Lamp;
+use crate::scene::{CrossingLamp, GateArm, SignalLamp};
+use crate::sounds::{SoundQueue, Sfx};
 use crate::trains::{Sim, Trains};
 use bevy::prelude::*;
 use rand::seq::SliceRandom;
@@ -18,7 +20,8 @@ impl Plugin for RoadsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Traffic>()
             .init_resource::<ClosedCrossings>()
-            .add_systems(Update, (update_crossings, animate_gates, spawn_traffic, spawn_emergency, emergency_calls, drive_cars).chain());
+            .init_resource::<TrafficClock>()
+            .add_systems(Update, (update_crossings, animate_gates, light_signals, spawn_traffic, spawn_emergency, emergency_calls, drive_cars).chain());
     }
 }
 
@@ -34,6 +37,78 @@ impl Default for Traffic {
 }
 #[derive(Resource, Default)]
 pub struct ClosedCrossings(pub HashSet<IVec2>);
+
+/// Simulation time that drives the traffic lights (stops when the sim is paused).
+#[derive(Resource, Default)]
+pub struct TrafficClock(pub f32);
+
+/// The two directions take turns: green, then yellow, then red while the other goes.
+const GREEN: f32 = 6.0;
+const YELLOW: f32 = 1.8;
+const ALL_RED: f32 = 0.8;
+
+/// What a traffic signal shows to traffic coming in through `edge` of junction `tile`.
+pub fn signal(tile: IVec2, edge: u8, clock: f32) -> Lamp {
+    let half = GREEN + YELLOW + ALL_RED;
+    // Each junction starts at a different point in its cycle.
+    let offset = ((tile.x * 7 + tile.y * 13).rem_euclid(17)) as f32;
+    let t = (clock + offset).rem_euclid(half * 2.0);
+    let (turn, t) = if t < half { (0, t) } else { (1, t - half) };
+    if edge % 2 != turn {
+        Lamp::Red
+    } else if t < GREEN {
+        Lamp::Green
+    } else if t < GREEN + YELLOW {
+        Lamp::Yellow
+    } else {
+        Lamp::Red
+    }
+}
+
+/// Lights up traffic signals and flashes the crossing lights while a train is coming.
+#[allow(clippy::too_many_arguments)]
+fn light_signals(
+    time: Res<Time>,
+    sim: Res<Sim>,
+    closed: Res<ClosedCrossings>,
+    mats: Option<Res<Materials>>,
+    mut clock: ResMut<TrafficClock>,
+    mut signals: Query<(&SignalLamp, &mut MeshMaterial3d<StandardMaterial>), Without<CrossingLamp>>,
+    mut crossing: Query<(&CrossingLamp, &GlobalTransform, &mut MeshMaterial3d<StandardMaterial>), Without<SignalLamp>>,
+    camera: Query<&GlobalTransform, With<Camera3d>>,
+    mut sounds: ResMut<SoundQueue>,
+    mut bell: Local<f32>,
+) {
+    let Some(mats) = mats else { return };
+    if sim.running {
+        clock.0 += time.delta_secs() * sim.time_scale;
+    }
+    for (s, mut m) in &mut signals {
+        let want = mats.lamp(s.lamp, signal(s.tile, s.edge, clock.0) == s.lamp);
+        if m.0 != want {
+            m.0 = want;
+        }
+    }
+    let flash = (clock.0 * 2.0) as i64 % 2;
+    let cam = camera.single().map(|c| c.translation()).unwrap_or(Vec3::splat(1e6));
+    let mut nearest = f32::MAX;
+    for (l, gt, mut m) in &mut crossing {
+        let on = closed.0.contains(&l.tile) && flash as usize == l.pair;
+        if closed.0.contains(&l.tile) {
+            nearest = nearest.min(gt.translation().distance(cam));
+        }
+        let want = mats.lamp(Lamp::Red, on);
+        if m.0 != want {
+            m.0 = want;
+        }
+    }
+    // Ding-ding-ding when you're close to a crossing that's closing.
+    *bell -= time.delta_secs();
+    if nearest < 12.0 && *bell <= 0.0 && sim.running {
+        *bell = 0.55;
+        sounds.play(Sfx::Bell, (0.5 * (1.0 - nearest / 12.0)).max(0.05));
+    }
+}
 
 #[derive(Component)]
 pub struct RoadCar {
@@ -57,6 +132,10 @@ pub struct RoadCar {
     home: Option<IVec2>,
     on_call: bool,
     call_timer: f32,
+    /// Which way we'll leave the junction ahead (decided before entering it).
+    next_exit: Option<u8>,
+    /// Why we're stopped (for diagnosing traffic jams).
+    why: &'static str,
 }
 
 impl RoadCar {
@@ -65,7 +144,7 @@ impl RoadCar {
     }
 
     fn new(tile: IVec2, entry: u8, exit: u8, speed: f32, half: f32) -> Self {
-        RoadCar { tile, entry, exit, t: 0.0, speed, cur: 0.0, half, hold: None, tail: None, waited: 0.0, wants: None, home: None, on_call: false, call_timer: 0.0 }
+        RoadCar { tile, entry, exit, t: 0.0, speed, cur: 0.0, half, hold: None, tail: None, waited: 0.0, wants: None, home: None, on_call: false, call_timer: 0.0, next_exit: None, why: "" }
     }
 }
 
@@ -364,6 +443,7 @@ fn drive_cars(
     sim: Res<Sim>,
     grid: Res<Grid>,
     closed: Res<ClosedCrossings>,
+    clock: Res<TrafficClock>,
     mut q: Query<(Entity, &mut RoadCar, &mut Transform)>,
 ) {
     let dt = time.delta_secs().min(0.05) * sim.time_scale;
@@ -398,6 +478,7 @@ fn drive_cars(
         let len = path_len(&c);
         let mut target = if c.on_call { c.speed * 1.5 } else { c.speed };
         c.wants = None;
+        c.why = "";
 
         // Keep a safe gap to whatever is in our lane ahead (bumper to bumper),
         // slowing in proportion to the gap so we can never close it.
@@ -417,6 +498,7 @@ fn drive_cars(
                 let gap = ahead.min(dist) - c.half - ohalf;
                 if gap < 0.8 {
                     target = target.min(((gap - 0.06) * 3.0).max(0.0));
+                    c.why = "car ahead";
                 }
             }
         }
@@ -428,17 +510,59 @@ fn drive_cars(
         // or a junction ahead that someone else is using.
         let next = c.tile + edge_dir(c.exit);
         let mut stop_at_edge = closed.0.contains(&next) && !closed.0.contains(&c.tile);
-        if c.hold != Some(next) && is_junction(&grid, next) && grid.road_edges(next).contains(&opposite(c.exit)) && c.t > 0.3 {
+        // Decide early which way we'll turn at the junction ahead.
+        let entry_next = opposite(c.exit);
+        if c.next_exit.is_none() && c.t > 0.2 && is_junction(&grid, next) {
+            let edges = grid.road_edges(next);
+            if edges.contains(&entry_next) {
+                c.next_exit = Some(choose_exit(&edges, entry_next, &mut rng));
+            }
+        }
+        // Don't block the box: only go into a junction if there's room on the far side.
+        if let Some(out) = c.next_exit.filter(|_| is_junction(&grid, next) && c.hold != Some(next) && c.t > 0.3) {
+            let away = Vec3::new(edge_dir(out).x as f32, 0.0, edge_dir(out).y as f32);
+            let mouth = tile_center(next) + away * 0.5;
+            // Room for our whole length (plus a gap) beyond the junction, in our lane.
+            let need = 2.0 * c.half + 0.35;
+            let full = snapshot.iter().any(|(oe, op, of, ohalf)| {
+                let d = (*op - mouth).with_y(0.0);
+                let along = d.dot(away);
+                let side = (d - away * along).length();
+                *oe != e && of.dot(away) > 0.5 && side < 0.3 && along > -0.25 && along - ohalf < need
+            });
+            if full && out != entry_next {
+                stop_at_edge = true;
+                c.why = "no room past junction";
+            }
+        }
+        // Traffic lights: stop on red, and on yellow unless it's too late to stop.
+        // Emergency vehicles on a call may go through (carefully).
+        let signalled = grid.get(next).is_some_and(|x| x.content == Content::Road) && grid.road_edges(next).len() >= 3;
+        if signalled && !c.on_call && c.hold != Some(next) && c.t > 0.3 {
+            match signal(next, opposite(c.exit), clock.0) {
+                Lamp::Red => {
+                    stop_at_edge = true;
+                    c.why = "red light";
+                }
+                Lamp::Yellow if c.t < 0.8 => {
+                    stop_at_edge = true;
+                    c.why = "yellow light";
+                }
+                _ => {}
+            }
+        }
+        // Only the first car in line may reserve the junction; one stuck in a
+        // queue would hold it while blocking the car in front of it.
+        if !stop_at_edge && !queued && c.hold != Some(next) && is_junction(&grid, next) && grid.road_edges(next).contains(&opposite(c.exit)) && c.t > 0.3 {
             // Only push in when the owner is itself waiting for a junction that
             // we hold: two cars blocking each other, which would never clear.
             let deadlock = |o: &Entity| c.waited > 2.0 && wants.get(o).is_some_and(|w| owner.get(w) == Some(&e));
             match owner.get(&next) {
                 Some(o) if *o != e && !deadlock(o) => {
                     stop_at_edge = true;
+                    c.why = "junction occupied";
                     c.wants = Some(next);
-                    if !queued {
-                        c.waited += dt;
-                    }
+                    c.waited += dt;
                 }
                 _ => {
                     // Claim it.
@@ -462,7 +586,10 @@ fn drive_cars(
             if edges.contains(&entry) {
                 c.tile = next;
                 c.entry = entry;
-                c.exit = choose_exit(&edges, entry, &mut rng);
+                c.exit = match c.next_exit.take() {
+                    Some(x) if edges.contains(&x) => x,
+                    _ => choose_exit(&edges, entry, &mut rng),
+                };
             } else {
                 // Road ended or was removed: turn around on this tile.
                 let ex = c.exit;
@@ -522,15 +649,20 @@ pub mod soak {
         true
     }
 
+    fn tick_clock(time: Res<Time>, mut clock: ResMut<TrafficClock>) {
+        clock.0 += time.delta_secs();
+    }
+
     pub fn run() -> Result<f32, String> {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(16)))
             .init_resource::<Sim>()
             .init_resource::<ClosedCrossings>()
+            .init_resource::<TrafficClock>()
             .insert_resource(Grid::default())
             .insert_resource(Trains::default())
-            .add_systems(Update, (update_crossings, drive_cars).chain());
+            .add_systems(Update, (update_crossings, tick_clock, drive_cars).chain());
         {
             let world = app.world_mut();
             let mut grid = world.remove_resource::<Grid>().unwrap();
@@ -564,6 +696,7 @@ pub mod soak {
         }
         app.update();
         let mut travelled = 0.0;
+        let mut window = [0.0f32; 4];
         let mut last: HashMap<Entity, Vec3> = HashMap::new();
         for frame in 0..4000 {
             app.update();
@@ -585,7 +718,25 @@ pub mod soak {
                 }
                 if let Some(prev) = last.insert(cars[i].0, cars[i].1 .0) {
                     travelled += (cars[i].1 .0 - prev).length();
+                    window[(frame / 1000) as usize] += (cars[i].1 .0 - prev).length();
                 }
+            }
+        }
+        eprintln!("tiles driven per 16 s: {:?}", window.map(|w| w.round()));
+        let world = app.world_mut();
+        let mut q = world.query::<&RoadCar>();
+        let mut why: HashMap<&str, usize> = HashMap::new();
+        for c in q.iter(world) {
+            if c.cur < 0.05 {
+                *why.entry(if c.why.is_empty() { "?" } else { c.why }).or_default() += 1;
+            }
+        }
+        eprintln!("stopped cars: {why:?}");
+        let stuck: Vec<IVec2> = q.iter(world).filter(|c| c.cur < 0.05 && c.waited > 5.0).filter_map(|c| c.wants).collect();
+        for j in stuck.iter().take(2) {
+            eprintln!("  junction {j}:");
+            for c in q.iter(world).filter(|c| c.tile == *j || c.hold == Some(*j) || c.tail == Some(*j)) {
+                eprintln!("    on {} t {:.2} v {:.2} entry {} exit {} next_exit {:?} hold {:?} tail {:?} wants {:?} why '{}'", c.tile, c.t, c.cur, c.entry, c.exit, c.next_exit, c.hold, c.tail, c.wants, c.why);
             }
         }
         // ~64 s of driving at ~1 tile/s for 60 cars; demand a good share of that, so no gridlock.

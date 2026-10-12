@@ -137,3 +137,75 @@ pub fn start_pos(grid: &Grid, tile: IVec2) -> Option<TrackPos> {
     let (a, b) = tr.paths()[0];
     Some(TrackPos { tile, entry: a, exit: b, t: 0.5 })
 }
+
+/// Straight track that can be turned into a ramp (and back).
+fn reshapeable(t: &Track) -> bool {
+    matches!(t.kind, TrackKind::Straight | TrackKind::Ramp)
+}
+
+/// A straight or ramp running from edge `near` (at level `a`) to edge `far` (at level `g`).
+fn straight_between(near: u8, far: u8, a: i32, g: i32) -> Track {
+    if a == g {
+        Track::new(TrackKind::Straight, near % 2, a)
+    } else {
+        // A ramp's high end is its rotated North edge.
+        let high = if a > g { near } else { far };
+        Track::new(TrackKind::Ramp, high, a.min(g))
+    }
+}
+
+/// Walks along straight track from `start` through edge `dir` and returns the
+/// level of the first piece that can't be sloped (or the far end of the line).
+fn anchor_level(grid: &Grid, start: IVec2, dir: u8, origin: IVec2) -> i32 {
+    let mut cur = start;
+    for _ in 0..64 {
+        let next = cur + edge_dir(dir);
+        match grid.track(next).filter(|t| t.edges().contains(&opposite(dir))) {
+            Some(t) if reshapeable(t) && next != origin => cur = next,
+            Some(t) => return t.edge_level(opposite(dir)),
+            None => return grid.track(cur).map(|t| if reshapeable(t) { t.level } else { t.edge_level(dir) }).unwrap_or(0),
+        }
+    }
+    grid.track(cur).map(|t| t.edge_level(dir)).unwrap_or(0)
+}
+
+/// After a piece's height changes, reshapes the straight track on either side
+/// into ramps so the line climbs or falls one level per tile, as far out as
+/// needed. Returns tiles where a step is left (curves, switches, stations...).
+pub fn smooth_levels(grid: &mut Grid, origin: IVec2) -> Vec<IVec2> {
+    let mut queue = vec![origin];
+    let mut done = std::collections::HashSet::from([origin]);
+    let mut stuck = vec![];
+    while let Some(t) = queue.pop() {
+        let Some(tr) = grid.track(t).copied() else { continue };
+        for e in tr.edges() {
+            let n = t + edge_dir(e);
+            let back = opposite(e);
+            let Some(nt) = grid.track(n).copied() else { continue };
+            if !nt.edges().contains(&back) {
+                continue;
+            }
+            let a = tr.edge_level(e);
+            if nt.edge_level(back) == a {
+                continue;
+            }
+            if done.contains(&n) || !reshapeable(&nt) {
+                stuck.push(n);
+                continue;
+            }
+            // Head for the height of the next fixed point along the line: a curve,
+            // switch, station or the end of the track.
+            let far = opposite(back);
+            let f = anchor_level(grid, n, far, origin);
+            // Step at most one level per tile toward it.
+            let g = (a - (a - f).signum()).clamp(0, MAX_LEVEL - 1);
+            let g = if f == a { a } else { g };
+            if let Some(x) = grid.edit(n) {
+                x.content = Content::Track(straight_between(back, far, a, g));
+            }
+            done.insert(n);
+            queue.push(n);
+        }
+    }
+    stuck
+}

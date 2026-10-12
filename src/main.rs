@@ -82,10 +82,15 @@ fn main() {
 fn auto_screenshots(
     mut commands: Commands,
     mut frame: Local<u32>,
+    mut held: Local<u32>,
+    mut closed_for: Local<u32>,
     mut cam: ResMut<camera::CamState>,
     mut trains: ResMut<trains::Trains>,
     vehicles: Query<(&roads::RoadCar, &Transform)>,
     mut cab_req: ResMut<cab::CabRequests>,
+    mut cranes: ResMut<crane::Cranes>,
+    closed: Res<roads::ClosedCrossings>,
+    grid: Res<grid::Grid>,
     mut exit: EventWriter<AppExit>,
 ) {
     use bevy::render::view::screenshot::{save_to_disk, Screenshot};
@@ -98,6 +103,8 @@ fn auto_screenshots(
         (CamMode::Overview, Some((IVec2::new(45, 63), 9.0)), "station", 0),
         (CamMode::Overview, Some((IVec2::new(45, 50), 7.0)), "town", 0),
         (CamMode::Overview, Some((IVec2::new(13, 76), 8.0)), "bridge", 0),
+        (CamMode::Overview, Some((IVec2::new(45, 48), 1.6)), "signals", 0),
+        (CamMode::Overview, Some((IVec2::new(45, 65), 2.2)), "crossing", 0),
         (CamMode::Overview, Some((IVec2::new(37, 48), 2.2)), "police", 0),
         (CamMode::Overview, Some((IVec2::new(47, 56), 2.5)), "hospital", 0),
         (CamMode::Overview, Some((IVec2::new(53, 40), 2.2)), "fire", 0),
@@ -111,10 +118,18 @@ fn auto_screenshots(
         (CamMode::Walk, None, "walk", 0),
         (CamMode::Overview, Some((IVec2::new(66, 66), 3.5)), "port", 0),
         (CamMode::Crane, None, "crane", 0),
+        (CamMode::Crane, None, "crane_grab", 0),
+        (CamMode::Crane, None, "crane_drop", 0),
         (CamMode::Overview, Some((IVec2::new(66, 65), 2.0)), "loading", 0),
     ];
     let step = 150;
     let i = (*frame / step) as usize;
+    // Hold the crossing shot until a train is actually coming (up to ~2 minutes).
+    *closed_for = if closed.0.is_empty() { 0 } else { *closed_for + 1 };
+    if i < views.len() && views[i].2 == "crossing" && *frame % step == step - 2 && *closed_for < 90 && *held < 7200 {
+        *held += 1;
+        *frame -= 1;
+    }
     if i >= views.len() + 1 {
         exit.write(AppExit::Success);
         return;
@@ -140,6 +155,28 @@ fn auto_screenshots(
             cam.yaw += 0.004;
         }
     }
+    // The crossing shot looks at whichever crossing is closed for a train.
+    if i < views.len() && views[i].2 == "crossing" {
+        if let Some(t) = closed.0.iter().next() {
+            cam.focus = grid::tile_center(*t);
+        }
+    }
+    // Pose the crane: hook down on the log pile, or carrying logs down onto the log car.
+    if i < views.len() && views[i].2.starts_with("crane_") {
+        let log_car = trains.list.iter().flat_map(|t| t.cars.iter()).find(|c| c.kind == models_vehicle::CarKind::LogCar).map(|c| trains::car_transform(&grid, c).translation);
+        if let Some(c) = cranes.active.and_then(|t| cranes.map.get_mut(&t)) {
+            c.tool = crane::Tool::Hook;
+            if views[i].2 == "crane_grab" {
+                c.carrying = None;
+                let p = crane::log_pile_pos(&grid, c);
+                crane::point_at(&grid, c, p);
+            } else if let Some(p) = log_car {
+                c.carrying = Some(trains::CargoKind::Logs);
+                crane::point_at(&grid, c, p);
+            }
+            c.hook = 0.0;
+        }
+    }
     // Mid-shovel for the fireman shot.
     if i < views.len() && views[i].0 == CamMode::Fireman && *frame % step == step - 45 {
         cab_req.shovel = true;
@@ -153,3 +190,4 @@ fn auto_screenshots(
 fn load_demo(mut grid: ResMut<grid::Grid>, mut trains: ResMut<trains::Trains>) {
     demo::build_demo(&mut grid, &mut trains);
 }
+

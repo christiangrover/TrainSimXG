@@ -2,7 +2,7 @@
 //! driver: big, clearly labelled levers, buttons and gauges.
 
 use crate::cab::{CabRequests, Fireman};
-use crate::crane::{Cranes, CraneInput, Tool};
+use crate::crane::{CraneInput, Cranes, Hint, Tool};
 use crate::trains::*;
 use bevy_egui::egui;
 use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, Vec2};
@@ -208,7 +208,7 @@ fn hold(ui: &mut egui::Ui, text: &str) -> bool {
 /// The crane driver's controls.
 pub fn crane_panel(ctx: &egui::Context, area: Rect, cranes: &mut Cranes, input: &mut CraneInput) {
     let Some(c) = cranes.active.and_then(|t| cranes.map.get(&t)) else { return };
-    let (tool, carrying, message) = (c.tool, c.carrying, c.message.clone());
+    let (tool, carrying, message, hint) = (c.tool, c.carrying, c.message.clone(), c.hint);
     egui::Area::new(egui::Id::new("crane")).order(egui::Order::Foreground).pivot(Align2::CENTER_BOTTOM).fixed_pos(Pos2::new(area.center().x, area.max.y - 6.0)).show(ctx, |ui| {
         egui::Frame::new().fill(PANEL).stroke(Stroke::new(3.0f32, Color32::from_rgb(240, 180, 20))).corner_radius(12.0).inner_margin(10.0).show(ui, |ui| {
             let what = match carrying {
@@ -217,6 +217,20 @@ pub fn crane_panel(ctx: &egui::Context, area: Rect, cranes: &mut Cranes, input: 
             };
             ui.vertical_centered(|ui| {
                 ui.label(egui::RichText::new(what).size(17.0).color(AMBER).strong());
+                // What the crane can do right now, in big friendly words.
+                let (say, col) = match hint {
+                    Hint::CanGrab => ("Ready! Press GRAB", GREEN),
+                    Hint::LowerToGrab => ("Lower the hook onto the pile (F)", AMBER),
+                    Hint::WrongTool => ("Wrong tool for this pile - press Tab", RED),
+                    Hint::CanDrop(..) => ("Ready! Press DROP to load the car", GREEN),
+                    Hint::LowerToDrop(..) => ("Lower it onto the car (F)", AMBER),
+                    Hint::WrongCar(..) => ("That car can't carry this", RED),
+                    Hint::CarFull(..) => ("That car is full", RED),
+                    Hint::OverPile => ("Over the pile - DROP puts it back", AMBER),
+                    Hint::Nothing if carrying.is_some() => ("Swing over a car with a white outline", CREAM),
+                    Hint::Nothing => ("Swing over the pile with the white ring", CREAM),
+                };
+                ui.label(egui::RichText::new(say).size(16.0).color(col).strong());
                 if !message.is_empty() {
                     ui.label(egui::RichText::new(message).color(CREAM));
                 }
@@ -258,7 +272,10 @@ pub fn crane_panel(ctx: &egui::Context, area: Rect, cranes: &mut Cranes, input: 
                     });
                 });
                 ui.separator();
-                let (txt, fill) = if carrying.is_some() { ("DROP  (Space)", Color32::from_rgb(170, 60, 30)) } else { ("GRAB  (Space)", Color32::from_rgb(40, 130, 60)) };
+                let ready = matches!(hint, Hint::CanGrab | Hint::CanDrop(..));
+                let txt = if carrying.is_some() { "DROP  (Space)" } else { "GRAB  (Space)" };
+                // The button lights up when it will work.
+                let fill = if ready { Color32::from_rgb(30, 170, 60) } else { Color32::from_rgb(80, 80, 85) };
                 if big_button(ui, txt, fill, Vec2::new(140.0, 62.0)).clicked() {
                     input.action = true;
                 }

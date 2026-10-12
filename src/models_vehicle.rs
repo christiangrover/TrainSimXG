@@ -78,8 +78,8 @@ impl CarKind {
     /// Where the engineer's eyes are (local space).
     pub fn cab_eye(self) -> Vec3 {
         match self {
-            CarKind::SteamEngine => Vec3::new(0.1, 0.5, -0.2),
-            CarKind::DieselRoad => Vec3::new(0.07, 0.42, 0.24),
+            CarKind::SteamEngine => Vec3::new(0.1, 0.37, -0.22),
+            CarKind::DieselRoad => Vec3::new(0.07, 0.36, 0.24),
             _ => Vec3::new(0.0, 0.38, 0.3),
         }
     }
@@ -144,13 +144,19 @@ fn underframe(m: &mut Geo, hl: f32, y: f32) {
     m.aabb(Vec3::new(-0.09, y - 0.04, -0.08), Vec3::new(-0.02, y, 0.08), IRON);
 }
 
-/// Framed window on a car side facing ±X.
+/// Framed window on a car side facing ±X. One-sided, so passengers can see out.
 fn side_window(m: &mut Geo, x: f32, y: f32, z: f32, hw: f32, hh: f32, frame: Color) {
-    let s = x.signum();
+    let n = Vec3::X * x.signum();
     m.mat(Mat::Paint);
-    m.cuboid(Vec3::new(x + s * 0.002, y, z), Vec3::new(0.002, hh + 0.006, hw + 0.006), Quat::IDENTITY, frame);
+    m.panel(Vec3::new(x, y, z) + n * 0.002, n, Vec3::Z, hw + 0.006, hh + 0.006, frame);
     m.mat(Mat::Glass);
-    m.cuboid(Vec3::new(x + s * 0.004, y, z), Vec3::new(0.002, hh, hw), Quat::IDENTITY, GLASS);
+    m.panel(Vec3::new(x, y, z) + n * 0.003, n, Vec3::Z, hw, hh, GLASS);
+}
+
+/// A cab window facing `n` (one-sided: clear when you look out through it).
+fn cab_window(m: &mut Geo, c: Vec3, n: Vec3, hw: f32, hh: f32) {
+    m.mat(Mat::Glass);
+    m.panel(c, n, Vec3::X, hw, hh, GLASS);
 }
 
 /// Handrail between two points (thin steel bar).
@@ -287,15 +293,21 @@ fn steam_engine(m: &mut Geo, paint: Color) {
     for x in [-0.155f32, 0.155] {
         side_window(m, x, 0.33, -0.25, 0.07, 0.055, BRASS);
     }
-    m.mat(Mat::Glass);
     for x in [-0.08f32, 0.08] {
-        m.cuboid(Vec3::new(x, 0.35, -0.118), Vec3::new(0.05, 0.04, 0.002), Quat::IDENTITY, GLASS);
+        cab_window(m, Vec3::new(x, 0.35, -0.118), Vec3::Z, 0.05, 0.04);
     }
     m.mat(Mat::Steel);
     m.aabb(Vec3::new(-0.1, 0.15, -0.13), Vec3::new(0.1, 0.32, -0.12), Color::srgb(0.2, 0.2, 0.2));
     for x in [-0.04f32, 0.04] {
         m.cylinder(Vec3::new(x, 0.28, -0.135), 0.015, 0.004, 10, along(), BRASS);
     }
+    // Firebox door on the backhead (glows with the fire) and a pressure gauge.
+    m.mat(Mat::Steel);
+    m.aabb(Vec3::new(-0.05, 0.17, -0.136), Vec3::new(0.05, 0.25, -0.13), Color::srgb(0.12, 0.12, 0.12));
+    m.mat(Mat::Fire);
+    m.aabb(Vec3::new(-0.035, 0.18, -0.138), Vec3::new(0.035, 0.24, -0.136), Color::WHITE);
+    m.mat(Mat::Paint);
+    m.cylinder(Vec3::new(0.0, 0.29, -0.137), 0.022, 0.002, 12, along(), WHITE);
     // Slatted cowcatcher and buffer beam.
     m.mat(Mat::Paint);
     m.aabb(Vec3::new(-0.15, 0.08, 0.42), Vec3::new(0.15, 0.13, 0.44), Color::srgb(0.65, 0.08, 0.06));
@@ -331,9 +343,8 @@ fn diesel_streamliner(m: &mut Geo, paint: Color) {
     m.aabb(Vec3::new(-0.152, 0.235, -hl), Vec3::new(0.152, 0.245, 0.22), YELLOW);
     m.aabb(Vec3::new(-0.152, 0.18, 0.22), Vec3::new(0.152, 0.19, 0.422), YELLOW);
     // Windscreen, headlight, number board, horn.
-    m.mat(Mat::Glass);
     for x in [-0.07f32, 0.07] {
-        m.cuboid(Vec3::new(x, 0.34, 0.343), Vec3::new(0.055, 0.025, 0.002), Quat::from_rotation_x(-0.785), GLASS);
+        cab_window(m, Vec3::new(x, 0.34, 0.344), Quat::from_rotation_x(-0.785) * Vec3::Z, 0.055, 0.025);
     }
     m.mat(Mat::Light);
     m.cylinder(Vec3::new(0.0, 0.25, 0.423), 0.025, 0.003, 12, along(), Color::WHITE);
@@ -394,10 +405,9 @@ fn diesel_road(m: &mut Geo, paint: Color) {
     for x in [-0.142f32, 0.142] {
         side_window(m, x, 0.35, 0.2, 0.06, 0.045, WHITE);
     }
-    m.mat(Mat::Glass);
     for x in [-0.07f32, 0.07] {
-        m.cuboid(Vec3::new(x, 0.36, 0.292), Vec3::new(0.055, 0.04, 0.002), Quat::IDENTITY, GLASS);
-        m.cuboid(Vec3::new(x, 0.36, 0.118), Vec3::new(0.05, 0.035, 0.002), Quat::IDENTITY, GLASS);
+        cab_window(m, Vec3::new(x, 0.36, 0.292), Vec3::Z, 0.055, 0.04);
+        cab_window(m, Vec3::new(x, 0.36, 0.118), Vec3::NEG_Z, 0.05, 0.035);
     }
     // Short hood with headlight and number board.
     m.mat(Mat::Paint);
@@ -534,9 +544,7 @@ pub fn car_mesh(kind: CarKind, paint: Color) -> Geo {
                 }
             }
             m.mat(Mat::Plain);
-            for z in [-0.22f32, 0.0, 0.22] {
-                m.sphere(Vec3::new(0.0, 0.33, z), 0.12, Color::srgb(0.06, 0.06, 0.06));
-            }
+            m.aabb(Vec3::new(-0.14, 0.18, -hl + 0.01), Vec3::new(0.14, 0.19, hl - 0.01), Color::srgb(0.12, 0.12, 0.12));
         }
         CarKind::LogCar => {
             let hl = 0.41;
@@ -545,12 +553,6 @@ pub fn car_mesh(kind: CarKind, paint: Color) -> Geo {
             truck(&mut m, 0.28, 2, 0.04);
             m.mat(Mat::Planks);
             m.aabb(Vec3::new(-0.15, 0.12, -hl), Vec3::new(0.15, 0.14, hl), Color::srgb(0.6, 0.5, 0.4));
-            m.mat(Mat::Plain);
-            for (x, y) in [(-0.08f32, 0.185f32), (0.0, 0.185), (0.08, 0.185), (-0.04, 0.265), (0.04, 0.265), (0.0, 0.34)] {
-                m.cylinder(Vec3::new(x, y, 0.0), 0.042, 0.37, 9, along(), Color::srgb(0.45, 0.32, 0.2));
-                m.cylinder(Vec3::new(x, y, 0.371), 0.036, 0.002, 9, along(), Color::srgb(0.8, 0.65, 0.45));
-                m.cylinder(Vec3::new(x, y, -0.371), 0.036, 0.002, 9, along(), Color::srgb(0.8, 0.65, 0.45));
-            }
             m.mat(Mat::Steel);
             for z in [-0.38f32, -0.1, 0.1, 0.38] {
                 for x in [-0.14f32, 0.14] {
@@ -821,5 +823,37 @@ pub fn road_vehicle_mesh(style: RoadStyle, paint: Color, on_call: bool) -> Geo {
             lights(&mut m, hw, hl + 0.01, 0.055);
         }
     }
+    m
+}
+
+/// One log of a log car's load (index 0..LOGS).
+pub const LOGS: usize = 6;
+pub fn cargo_log_mesh(i: usize) -> Geo {
+    let mut m = Geo::new();
+    let (x, y) = [(-0.08f32, 0.185f32), (0.0, 0.185), (0.08, 0.185), (-0.04, 0.265), (0.04, 0.265), (0.0, 0.34)][i % LOGS];
+    m.mat(Mat::Plain);
+    m.cylinder(Vec3::new(x, y, 0.0), 0.042, 0.37, 9, along(), Color::srgb(0.45, 0.32, 0.2));
+    m.cylinder(Vec3::new(x, y, 0.371), 0.036, 0.002, 9, along(), Color::srgb(0.8, 0.65, 0.45));
+    m.cylinder(Vec3::new(x, y, -0.371), 0.036, 0.002, 9, along(), Color::srgb(0.8, 0.65, 0.45));
+    m
+}
+
+/// A hopper's heap of rocks; origin at the bottom so it can be scaled by fill.
+pub fn cargo_rock_mesh() -> Geo {
+    let mut m = Geo::new();
+    m.mat(Mat::Rock);
+    for (i, z) in [-0.24f32, -0.12, 0.0, 0.12, 0.24].iter().enumerate() {
+        let r = 0.11 + (i % 2) as f32 * 0.02;
+        m.sphere(Vec3::new(0.0, r * 0.4, *z), r, Color::srgb(0.85, 0.84, 0.8));
+    }
+    m
+}
+
+/// The coloured band and dome cap showing what a tank car holds.
+pub fn cargo_band_mesh(color: Color) -> Geo {
+    let mut m = Geo::new();
+    m.mat(Mat::Paint);
+    m.cylinder(Vec3::new(0.0, 0.24, 0.0), 0.128, 0.12, 20, along(), color);
+    m.cylinder(Vec3::new(0.0, 0.41, 0.0), 0.052, 0.006, 12, Quat::IDENTITY, color);
     m
 }

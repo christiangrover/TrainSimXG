@@ -9,7 +9,7 @@ cargo run --release
 
 The game opens with a demo layout. **New… → Yes, clear** gives you an empty table.
 
-## Views (keys 1–5)
+## Views (keys 1–7)
 
 | Key | View | Controls |
 |---|---|---|
@@ -17,9 +17,27 @@ The game opens with a demo layout. **New… → Yes, clear** gives you an empty 
 | 2 | Walk around the table | WASD walk, right-drag look, mouse wheel crouch or stand, Shift run |
 | 3 | Follow train | right-drag orbit, mouse wheel zoom |
 | 4 | Passenger | right-drag look, Tab next car, V other side's window |
-| 5 | Engineer | W/Up throttle up, S/Down throttle down (below zero is reverse), X shut off, hold Space brake |
+| 5 | Engineer | Drive from the cab: W/S throttle (below STOP is reverse), X shut off, hold Space to brake, E emergency brake, H horn. Or use the throttle and brake levers and the buttons on the control desk. |
+| 6 | Fireman | Stand on a steam engine's footplate. Press Space (or SHOVEL COAL) to throw coal into the firebox and keep the steam needle in the green. |
+| 7 | Crane | Drive the port crane: A/D swing, W/S trolley out and in, R/F hook up and down, Space grab or drop, Tab switches between the hook (logs) and the grab bucket (rocks), C next crane. |
 
-T cycles through the trains. You can also pick one in the right-hand panel.
+T cycles through the trains. You can also pick one in the right-hand panel. H sounds the horn (or the whistle on a steam engine) from any train view.
+
+## Fuel, coal and water
+
+Each train has a **Fuel: Auto / Manual** switch, in the train panel and on the cab desk.
+- **Auto:** engines never run out.
+- **Manual:**
+  - Diesels burn fuel.
+  - Steam engines burn coal and use water, and their fire burns down. Boiler pressure is what moves a steam engine, so on Manual you are the fireman: shovel coal in view 6 to keep the pressure up. Too much coal makes black smoke. Self-driving steam trains have their own fireman.
+  - Stopping at a station tops up fuel, coal and water. Water towers refill steam engines, and fuel depots refill diesels.
+
+## Ports, cranes and cargo
+
+Freight cars carry real loads that show on the train: logs on log cars, rocks in hoppers, and water (blue band) or oil (black band) in tank cars.
+- **Port with crane:** goes beside water. It has a quay, a moored ship, and piles of logs and rocks. Lay track next to it and add a station so self-driving trains stop there. The crane loads stopped trains automatically, and the train waits until it's done. Press 7 to drive the crane yourself.
+- **Water tower / Fuel depot:** placed beside the track. A tank car stopped next to one fills with water or oil.
+- **Unloading:** cargo unloads when the train stops at any other station, so there's always more to do.
 
 ## Building
 
@@ -62,7 +80,11 @@ The photo textures (grass, gravel, asphalt, brick, roof tiles, wood and more) ar
 |---|---|
 | `grid.rs` | tiles, track pieces, how edges connect |
 | `track.rs` | rail geometry and moving along the track |
-| `trains.rs` | train simulation, smoke |
+| `trains.rs` | train simulation, fuel, cargo, smoke |
+| `cab.rs`, `cab_ui.rs` | engineer and fireman controls, cab desk, gauges |
+| `crane.rs` | port cranes: controls and automatic loading |
+| `services.rs` | refuelling, filling and unloading at stops |
+| `sounds.rs` | sound effects, synthesised in code |
 | `roads.rs` | road traffic, emergency vehicles, crossing gates |
 | `build.rs` | toolbox, picking tiles |
 | `camera.rs` | the five views |

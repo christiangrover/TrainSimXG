@@ -259,7 +259,19 @@ fn use_tool(
             }
         }
         Tool::Decor(kind) => {
-            let rot = bs.rot;
+            let mut rot = bs.rot;
+            if kind == DecorKind::Port {
+                // Ports sit on the shore, crane and quay facing the water.
+                match grid.water_edge(t) {
+                    Some(e) => rot = (e + 2) % 4,
+                    None => {
+                        if pressed {
+                            toast.show("A port has to go right beside water.");
+                        }
+                        return;
+                    }
+                }
+            }
             let variant = (t.x * 31 + t.y * 17).unsigned_abs() as u8;
             if let Some(x) = grid.edit(t) {
                 if x.ground == Ground::Water || x.track().is_some() {

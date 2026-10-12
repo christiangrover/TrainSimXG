@@ -2,6 +2,9 @@
 //! passenger-window and engineer-cab overlays.
 
 use crate::build::{BuildState, Tool};
+use crate::cab::{CabRequests, Fireman};
+use crate::cab_ui;
+use crate::crane::{CraneInput, Cranes};
 use crate::camera::{CamMode, CamState};
 use crate::demo::build_demo;
 use crate::grid::*;
@@ -9,8 +12,18 @@ use crate::models_vehicle::CarKind;
 use crate::roads::Traffic;
 use crate::save;
 use crate::trains::*;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
+
+/// Cab, fireman and crane state the panels read and write.
+#[derive(SystemParam)]
+struct CabUi<'w> {
+    req: ResMut<'w, CabRequests>,
+    fireman: Res<'w, Fireman>,
+    cranes: ResMut<'w, Cranes>,
+    crane_input: ResMut<'w, CraneInput>,
+}
 
 pub struct UiPlugin;
 
@@ -76,6 +89,7 @@ fn ui_system(
     mut toast: ResMut<Toast>,
     mut sui: ResMut<SaveUi>,
     mut capture: ResMut<UiCapture>,
+    mut cab: CabUi,
 ) -> Result {
     let ctx = contexts.ctx_mut()?;
 
@@ -159,7 +173,9 @@ fn ui_system(
             CamMode::Walk => "WASD walk around the table · right-drag look · wheel crouch / stand tall · Shift run · left-click use tool",
             CamMode::Follow => "Right-drag orbit the train · wheel zoom · T next train",
             CamMode::Passenger => "Right-drag look around · Tab change car · V other window · T next train",
-            CamMode::Engineer => "W / Up throttle up · S / Down throttle down (below zero = reverse) · X shut off · hold Space brake · right-drag look",
+            CamMode::Engineer => "W / S throttle (below STOP = reverse) · X shut off · hold Space brake · E emergency brake · H horn · right-drag look",
+            CamMode::Fireman => "Space shovel coal into the firebox · H whistle · right-drag look around the cab",
+            CamMode::Crane => "A / D swing · W / S trolley out / in · R / F hook up / down · Space grab / drop · Tab hook or bucket · C next crane",
         };
         ui.label(txt);
     });
@@ -203,6 +219,12 @@ fn ui_system(
                     tool_button(ui, &mut bs, Tool::Decor(d));
                 }
                 ui.small("Each one sends its own vehicles out onto nearby roads.");
+            });
+            egui::CollapsingHeader::new("Railway services").default_open(true).show(ui, |ui| {
+                for d in DecorKind::RAILWAY {
+                    tool_button(ui, &mut bs, Tool::Decor(d));
+                }
+                ui.small("Ports go beside water, with track next to them. Put water towers and fuel depots beside the track. Add a station so self-driving trains stop there.");
             });
             egui::CollapsingHeader::new("Nature & details").default_open(false).show(ui, |ui| {
                 for d in DecorKind::NATURE {
@@ -305,6 +327,31 @@ fn ui_system(
                             t.auto_dir = -t.auto_dir;
                         }
                     }
+                    ui.horizontal(|ui| {
+                        ui.small("Fuel:");
+                        ui.selectable_value(&mut t.fuel_manual, false, "Auto");
+                        ui.selectable_value(&mut t.fuel_manual, true, "Manual");
+                    });
+                    if t.fuel_manual {
+                        let gauges = match t.power_kind() {
+                            Power::Steam => format!("Coal {:.0}% · Water {:.0}% · Steam {:.0}%", t.fuel * 100.0, t.water * 100.0, t.pressure.min(1.0) * 100.0),
+                            Power::Diesel => format!("Fuel {:.0}%", t.fuel * 100.0),
+                            Power::None => String::new(),
+                        };
+                        ui.small(gauges);
+                    }
+                    let loads: Vec<String> = t
+                        .cars
+                        .iter()
+                        .filter(|c| matches!(c.kind, CarKind::LogCar | CarKind::Hopper | CarKind::Tanker))
+                        .map(|c| if c.cargo.amount > 0.01 { format!("{} {:.0}%", c.cargo.kind.label(), c.cargo.amount * 100.0) } else { "empty".into() })
+                        .collect();
+                    if !loads.is_empty() {
+                        ui.small(format!("Cargo: {}", loads.join(", ")));
+                    }
+                    if t.ebrake && ui.button("Release emergency brake").clicked() {
+                        t.ebrake = false;
+                    }
                     if !t.status.is_empty() {
                         ui.small(&t.status);
                     }
@@ -327,8 +374,8 @@ fn ui_system(
     let area = ctx.available_rect();
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::new("overlay")));
     // Riding through a tunnel: it's dark in here!
-    if matches!(cam.mode, CamMode::Passenger | CamMode::Engineer) {
-        let idx = if cam.mode == CamMode::Engineer { 0 } else { cam.passenger_car };
+    if matches!(cam.mode, CamMode::Passenger | CamMode::Engineer | CamMode::Fireman) {
+        let idx = if cam.mode == CamMode::Passenger { cam.passenger_car } else { 0 };
         if let Some(car) = trains.selected().and_then(|t| t.cars.get(idx)) {
             if grid.is_tunnel(car.pos.tile) {
                 painter.rect_filled(area, 0.0, egui::Color32::from_rgba_unmultiplied(8, 6, 4, 248));
@@ -356,32 +403,20 @@ fn ui_system(
             }
         }
         CamMode::Engineer => {
-            if let Some(tr) = trains.selected() {
-                let panel = egui::Rect::from_min_size(egui::pos2(area.center().x - 170.0, area.max.y - 100.0), egui::vec2(340.0, 90.0));
-                painter.rect_filled(panel, 8.0, egui::Color32::from_rgba_unmultiplied(20, 20, 20, 200));
-                let dir = if tr.throttle > 0.0 {
-                    "AHEAD"
-                } else if tr.throttle < 0.0 {
-                    "REVERSE"
-                } else {
-                    "NEUTRAL"
-                };
-                let brake = if tr.brake { "  BRAKE" } else { "" };
-                painter.text(panel.min + egui::vec2(14.0, 12.0), egui::Align2::LEFT_TOP, format!("{}  ·  {:.1} tiles/s", tr.name, tr.speed.abs()), egui::FontId::proportional(17.0), egui::Color32::WHITE);
-                painter.text(panel.min + egui::vec2(14.0, 36.0), egui::Align2::LEFT_TOP, format!("Throttle {:+.0}%  {dir}{brake}", tr.throttle * 100.0), egui::FontId::monospace(16.0), egui::Color32::from_rgb(255, 210, 90));
-                // Throttle bar.
-                let bar = egui::Rect::from_min_size(panel.min + egui::vec2(14.0, 62.0), egui::vec2(312.0, 14.0));
-                painter.rect_filled(bar, 3.0, egui::Color32::from_gray(60));
-                let c = bar.center().x;
-                let x = c + tr.throttle * bar.width() * 0.5;
-                let fill = egui::Rect::from_x_y_ranges(c.min(x)..=c.max(x), bar.y_range());
-                painter.rect_filled(fill, 3.0, if tr.throttle >= 0.0 { egui::Color32::from_rgb(80, 200, 90) } else { egui::Color32::from_rgb(230, 120, 60) });
-                if !tr.status.is_empty() {
-                    painter.text(egui::pos2(area.center().x, area.max.y - 120.0), egui::Align2::CENTER_CENTER, &tr.status, egui::FontId::proportional(20.0), egui::Color32::from_rgb(255, 120, 100));
+            if let Some(id) = trains.selected {
+                let diesel = trains.get(id).is_some_and(|t| t.power_kind() == Power::Diesel);
+                cab_ui::cab_frame(&painter, area, diesel);
+                if let Some(t) = trains.get_mut(id) {
+                    cab_ui::engineer_panel(ctx, area, t, &mut cab.req);
                 }
             }
         }
-        _ => {}
+        CamMode::Fireman => {
+            if let Some(t) = trains.selected.and_then(|id| trains.get_mut(id)) {
+                cab_ui::fireman_panel(ctx, area, t, &mut cab.req, &cab.fireman);
+            }
+        }
+        CamMode::Crane => cab_ui::crane_panel(ctx, area, &mut cab.cranes, &mut cab.crane_input),        _ => {}
     }
 
     if toast.left > 0.0 {

@@ -1,7 +1,10 @@
 //! Camera views: overview (orbit), walking around the table, following a
-//! train, sitting in a passenger car, and driving from the engineer's cab.
+//! train, sitting in a passenger car, driving from the engineer's cab,
+//! stoking the fire as the fireman, and driving a port crane.
 
+use crate::crane::{crane_eye, Cranes};
 use crate::grid::*;
+use crate::models_vehicle::CarKind;
 use crate::scene::FLOOR_Y;
 use crate::trains::*;
 use crate::ui::UiCapture;
@@ -19,7 +22,7 @@ impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CamState>()
             .add_systems(Startup, spawn_camera)
-            .add_systems(Update, (camera_input, engineer_controls, apply_camera).chain());
+            .add_systems(Update, (camera_input, apply_camera).chain());
     }
 }
 
@@ -30,10 +33,12 @@ pub enum CamMode {
     Follow,
     Passenger,
     Engineer,
+    Fireman,
+    Crane,
 }
 
 impl CamMode {
-    pub const ALL: [CamMode; 5] = [CamMode::Overview, CamMode::Walk, CamMode::Follow, CamMode::Passenger, CamMode::Engineer];
+    pub const ALL: [CamMode; 7] = [CamMode::Overview, CamMode::Walk, CamMode::Follow, CamMode::Passenger, CamMode::Engineer, CamMode::Fireman, CamMode::Crane];
     pub fn label(self) -> &'static str {
         match self {
             CamMode::Overview => "1 Overview",
@@ -41,10 +46,12 @@ impl CamMode {
             CamMode::Follow => "3 Follow train",
             CamMode::Passenger => "4 Passenger",
             CamMode::Engineer => "5 Engineer",
+            CamMode::Fireman => "6 Fireman",
+            CamMode::Crane => "7 Crane",
         }
     }
     pub fn needs_train(self) -> bool {
-        matches!(self, CamMode::Follow | CamMode::Passenger | CamMode::Engineer)
+        matches!(self, CamMode::Follow | CamMode::Passenger | CamMode::Engineer | CamMode::Fireman)
     }
 }
 
@@ -126,6 +133,7 @@ fn camera_input(
     ui: Res<UiCapture>,
     mut cam: ResMut<CamState>,
     mut trains: ResMut<Trains>,
+    cranes: Res<Cranes>,
 ) {
     let dt = time.delta_secs();
     if !ui.keyboard {
@@ -135,6 +143,8 @@ fn camera_input(
             (KeyCode::Digit3, CamMode::Follow),
             (KeyCode::Digit4, CamMode::Passenger),
             (KeyCode::Digit5, CamMode::Engineer),
+            (KeyCode::Digit6, CamMode::Fireman),
+            (KeyCode::Digit7, CamMode::Crane),
         ] {
             if keys.just_pressed(k) {
                 cam.set_mode(m);
@@ -163,6 +173,19 @@ fn camera_input(
         }
     }
     if cam.mode.needs_train() && trains.selected().is_none() {
+        cam.mode = CamMode::Overview;
+    }
+    // The fireman needs a steam engine: hop onto one if this train hasn't got one.
+    if cam.mode == CamMode::Fireman {
+        let steam = |t: &Train| t.cars.first().is_some_and(|c| c.kind == CarKind::SteamEngine);
+        if !trains.selected().is_some_and(steam) {
+            match trains.list.iter().find(|t| steam(t)) {
+                Some(t) => trains.selected = Some(t.id),
+                None => cam.mode = CamMode::Overview,
+            }
+        }
+    }
+    if cam.mode == CamMode::Crane && cranes.active.is_none() {
         cam.mode = CamMode::Overview;
     }
     // Passengers sit in a car with seats, not in the engine.
@@ -252,30 +275,12 @@ fn camera_input(
             cam.follow_pitch = (cam.follow_pitch + drag.y).clamp(0.02, 1.5);
             cam.follow_dist = (cam.follow_dist * (1.0 - wheel * 0.1)).clamp(0.8, 40.0);
         }
-        CamMode::Passenger | CamMode::Engineer => {
+        CamMode::Crane => {}
+        CamMode::Passenger | CamMode::Engineer | CamMode::Fireman => {
             cam.look_yaw -= drag.x;
             cam.look_pitch = (cam.look_pitch - drag.y).clamp(-1.2, 1.2);
         }
     }
-}
-
-fn engineer_controls(keys: Res<ButtonInput<KeyCode>>, ui: Res<UiCapture>, cam: Res<CamState>, mut trains: ResMut<Trains>) {
-    if cam.mode != CamMode::Engineer || ui.keyboard {
-        return;
-    }
-    let Some(id) = trains.selected else { return };
-    let Some(t) = trains.get_mut(id) else { return };
-    t.manual = true;
-    if keys.just_pressed(KeyCode::KeyW) || keys.just_pressed(KeyCode::ArrowUp) {
-        t.throttle = (t.throttle + 0.25).min(1.0);
-    }
-    if keys.just_pressed(KeyCode::KeyS) || keys.just_pressed(KeyCode::ArrowDown) {
-        t.throttle = (t.throttle - 0.25).max(-1.0);
-    }
-    if keys.just_pressed(KeyCode::KeyX) {
-        t.throttle = 0.0;
-    }
-    t.brake = keys.pressed(KeyCode::Space);
 }
 
 fn apply_camera(
@@ -283,6 +288,7 @@ fn apply_camera(
     cam: Res<CamState>,
     grid: Res<Grid>,
     trains: Res<Trains>,
+    cranes: Res<Cranes>,
     mut q: Query<&mut Transform, With<Camera3d>>,
 ) {
     let Ok(mut tf) = q.single_mut() else { return };
@@ -323,6 +329,22 @@ fn apply_camera(
             let eye = ct.transform_point(Vec3::new(0.06 * side, 0.27, 0.0));
             let local = Quat::from_rotation_y(side * std::f32::consts::FRAC_PI_2 + cam.look_yaw) * Quat::from_rotation_x(-cam.look_pitch);
             target = Transform::from_translation(eye).with_rotation(ct.rotation * local * Quat::from_rotation_y(std::f32::consts::PI));
+        }
+        CamMode::Fireman => {
+            // Standing on the footplate, facing the firebox door.
+            let Some((ct, _)) = car_tf(Some(0)) else { return };
+            let eye = ct.transform_point(Vec3::new(0.0, 0.34, -0.37));
+            let local = Quat::from_rotation_y(cam.look_yaw) * Quat::from_rotation_x(-cam.look_pitch + 0.5);
+            target = Transform::from_translation(eye).with_rotation(ct.rotation * local * Quat::from_rotation_y(std::f32::consts::PI));
+        }
+        CamMode::Crane => {
+            let Some(c) = cranes.active.and_then(|t| cranes.map.get(&t)) else { return };
+            let (eye, hook) = crane_eye(&grid, c);
+            target = Transform::from_translation(eye).looking_at(hook.lerp(eye, 0.15) - Vec3::Y * 0.1, Vec3::Y);
+            let k = 1.0 - (-8.0 * dt).exp();
+            tf.translation = eye;
+            tf.rotation = tf.rotation.slerp(target.rotation, k);
+            return;
         }
         CamMode::Engineer => {
             let Some((ct, kind)) = car_tf(Some(0)) else { return };

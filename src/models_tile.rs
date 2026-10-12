@@ -620,6 +620,9 @@ pub fn decor_mesh(kind: DecorKind, variant: u8, t: IVec2) -> Geo {
             m.sphere(Vec3::new(0.0, 0.37, 0.0), 0.05, Color::srgb(0.7, 0.85, 1.0));
         }
         DecorKind::Person => person(&mut m, t, Vec3::ZERO),
+        DecorKind::Port => port_mesh(&mut m),
+        DecorKind::WaterTower => water_tower_mesh(&mut m),
+        DecorKind::FuelDepot => fuel_depot_mesh(&mut m),
         DecorKind::PoliceStation => {
             m.mat(Mat::Brick);
             m.aabb(Vec3::new(-0.42, 0.0, -0.32), Vec3::new(0.42, 0.52, 0.28), Color::srgb(0.85, 0.85, 0.9));
@@ -724,4 +727,256 @@ fn person(m: &mut Geo, t: IVec2, at: Vec3) {
     }
     m.sphere(at + Vec3::new(0.0, 0.185, 0.0), 0.028, Color::srgb(0.95, 0.78, 0.62));
     m.sphere(at + Vec3::new(0.0, 0.198, -0.004), 0.026, [Color::srgb(0.3, 0.2, 0.1), Color::srgb(0.9, 0.8, 0.4), DARK][(hash(t, 8) * 3.0) as usize % 3]);
+}
+
+/// Where the port's cargo piles are (port-local; +Z faces the water).
+pub const LOG_PILE: Vec3 = Vec3::new(-0.3, 0.0, 0.3);
+pub const ROCK_PILE: Vec3 = Vec3::new(0.3, 0.0, 0.3);
+/// Height of the crane's slewing ring above the quay.
+pub const CRANE_TOP: f32 = 1.2;
+pub const CRANE_YELLOW: Color = Color::srgb(0.95, 0.72, 0.08);
+
+fn log_pile(m: &mut Geo, at: Vec3) {
+    m.mat(Mat::Plain);
+    let along = Quat::from_rotation_z(FRAC_PI_2);
+    for (x, y, n) in [(0.0f32, 0.035f32, 3), (0.0, 0.095, 2), (0.0, 0.155, 1)] {
+        for i in 0..n {
+            let z = (i as f32 - (n - 1) as f32 * 0.5) * 0.07;
+            m.cylinder(at + Vec3::new(x, y, z), 0.035, 0.15, 8, along, Color::srgb(0.45, 0.32, 0.2));
+            m.cylinder(at + Vec3::new(0.151, y, z), 0.03, 0.002, 8, along, Color::srgb(0.8, 0.65, 0.45));
+            m.cylinder(at + Vec3::new(-0.151, y, z), 0.03, 0.002, 8, along, Color::srgb(0.8, 0.65, 0.45));
+        }
+    }
+}
+
+fn rock_pile(m: &mut Geo, at: Vec3) {
+    m.mat(Mat::Rock);
+    for (i, (x, z, r)) in [(0.0f32, 0.0f32, 0.12f32), (0.08, 0.05, 0.08), (-0.08, 0.04, 0.09), (0.03, -0.08, 0.08), (-0.05, -0.06, 0.07)].iter().enumerate() {
+        let tint = 0.8 + (i % 3) as f32 * 0.08;
+        m.sphere(at + Vec3::new(*x, r * 0.55, *z), *r, Color::srgb(tint, tint, tint * 0.95));
+    }
+}
+
+fn port_mesh(m: &mut Geo) {
+    // Concrete quay with a timber fender along the water's edge, bollards.
+    m.mat(Mat::Concrete);
+    m.aabb(Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 0.05, 0.5), Color::srgb(0.8, 0.79, 0.77));
+    m.aabb(Vec3::new(-0.5, -0.15, 0.45), Vec3::new(0.5, 0.05, 0.5), Color::srgb(0.7, 0.7, 0.7));
+    m.mat(Mat::Planks);
+    m.aabb(Vec3::new(-0.5, -0.12, 0.5), Vec3::new(0.5, 0.0, 0.52), Color::srgb(0.5, 0.4, 0.3));
+    m.mat(Mat::Paint);
+    m.aabb(Vec3::new(-0.5, 0.05, 0.42), Vec3::new(0.5, 0.052, 0.43), Color::srgb(0.95, 0.8, 0.1));
+    m.mat(Mat::Steel);
+    for x in [-0.42f32, 0.42] {
+        m.cylinder(Vec3::new(x, 0.08, 0.47), 0.018, 0.03, 8, Quat::IDENTITY, DARK);
+        m.cylinder(Vec3::new(x, 0.115, 0.47), 0.024, 0.006, 8, Quat::IDENTITY, DARK);
+    }
+    // Cargo waiting to be loaded.
+    log_pile(m, LOG_PILE + Vec3::Y * 0.05);
+    rock_pile(m, ROCK_PILE + Vec3::Y * 0.05);
+    // Crane tower: four legs with cross bracing, a ladder and a slewing ring.
+    m.mat(Mat::Paint);
+    let h = CRANE_TOP;
+    for (x, z) in [(-0.07f32, -0.07f32), (0.07, -0.07), (0.07, 0.07), (-0.07, 0.07)] {
+        m.aabb(Vec3::new(x - 0.012, 0.05, z - 0.012), Vec3::new(x + 0.012, h, z + 0.012), CRANE_YELLOW);
+    }
+    let mut y = 0.12;
+    while y < h - 0.05 {
+        for (a, b) in [(Vec3::new(-0.07, y, -0.07), Vec3::new(0.07, y + 0.13, -0.07)), (Vec3::new(0.07, y, 0.07), Vec3::new(-0.07, y + 0.13, 0.07)), (Vec3::new(-0.07, y, 0.07), Vec3::new(-0.07, y + 0.13, -0.07)), (Vec3::new(0.07, y, -0.07), Vec3::new(0.07, y + 0.13, 0.07))] {
+            let d = b - a;
+            m.cuboid((a + b) * 0.5, Vec3::new(0.005, 0.005, d.length() * 0.5), basis_from_dir(d), CRANE_YELLOW);
+        }
+        y += 0.13;
+    }
+    m.aabb(Vec3::new(-0.16, 0.05, -0.16), Vec3::new(0.16, 0.09, 0.16), Color::srgb(0.3, 0.3, 0.32));
+    m.mat(Mat::Steel);
+    m.cylinder(Vec3::new(0.0, h - 0.015, 0.0), 0.11, 0.015, 16, Quat::IDENTITY, DARK);
+    // A cargo ship moored alongside (sits out over the water).
+    ship(m, Vec3::new(0.0, -0.06, 0.82));
+}
+
+fn ship(m: &mut Geo, at: Vec3) {
+    let (hl, hw) = (0.75f32, 0.2f32);
+    m.mat(Mat::Paint);
+    m.aabb(at + Vec3::new(-hl, -0.05, -hw), at + Vec3::new(hl, 0.04, hw), Color::srgb(0.7, 0.12, 0.1));
+    m.aabb(at + Vec3::new(-hl, 0.04, -hw), at + Vec3::new(hl, 0.15, hw), Color::srgb(0.12, 0.15, 0.25));
+    // Pointed bow.
+    let bow = |x: f32, y: f32, z: f32| at + Vec3::new(x, y, z);
+    for (y0, y1, c) in [(-0.05f32, 0.04f32, Color::srgb(0.7, 0.12, 0.1)), (0.04, 0.15, Color::srgb(0.12, 0.15, 0.25))] {
+        m.poly(&[bow(hl, y0, hw), bow(hl + 0.25, y0, 0.0), bow(hl + 0.25, y1, 0.0), bow(hl, y1, hw)], c);
+        m.poly(&[bow(hl + 0.25, y0, 0.0), bow(hl, y0, -hw), bow(hl, y1, -hw), bow(hl + 0.25, y1, 0.0)], c);
+        m.poly(&[bow(hl, y1, hw), bow(hl + 0.25, y1, 0.0), bow(hl, y1, -hw)], Color::srgb(0.5, 0.45, 0.4));
+    }
+    m.aabb(at + Vec3::new(-hl, 0.15, -hw), at + Vec3::new(hl, 0.16, hw), Color::srgb(0.5, 0.45, 0.4));
+    // Bridge house at the stern with windows and a funnel.
+    m.aabb(at + Vec3::new(-hl, 0.16, -0.15), at + Vec3::new(-hl + 0.25, 0.42, 0.15), WHITE);
+    m.mat(Mat::Glass);
+    m.aabb(at + Vec3::new(-hl + 0.249, 0.34, -0.12), at + Vec3::new(-hl + 0.252, 0.39, 0.12), GLASS);
+    m.mat(Mat::Paint);
+    m.cylinder(at + Vec3::new(-hl + 0.08, 0.5, 0.0), 0.05, 0.08, 10, Quat::IDENTITY, Color::srgb(0.7, 0.12, 0.1));
+    m.cylinder(at + Vec3::new(-hl + 0.08, 0.59, 0.0), 0.052, 0.012, 10, Quat::IDENTITY, DARK);
+    // Cargo: containers and a load of logs.
+    for (i, x) in [0.0f32, 0.18].iter().enumerate() {
+        let c = [Color::srgb(0.15, 0.45, 0.7), Color::srgb(0.85, 0.5, 0.1)][i];
+        m.mat(Mat::Corrugated);
+        m.aabb(at + Vec3::new(*x - 0.08, 0.16, -0.15), at + Vec3::new(*x + 0.08, 0.28, 0.15), c);
+    }
+    log_pile(m, at + Vec3::new(0.48, 0.16, 0.0));
+}
+
+/// The crane's rotating top: cab, jib (along +Z), counter-jib and counterweight.
+pub fn crane_top_mesh() -> Geo {
+    let mut m = Geo::new();
+    m.mat(Mat::Paint);
+    m.aabb(Vec3::new(-0.13, 0.0, -0.12), Vec3::new(0.13, 0.04, 0.12), CRANE_YELLOW);
+    // Operator's cab with big windows.
+    m.aabb(Vec3::new(0.05, 0.04, 0.0), Vec3::new(0.17, 0.18, 0.14), CRANE_YELLOW);
+    // One-sided glass so the driver can see out.
+    m.mat(Mat::Glass);
+    m.panel(Vec3::new(0.11, 0.13, 0.141), Vec3::Z, Vec3::X, 0.05, 0.04, GLASS);
+    m.panel(Vec3::new(0.171, 0.13, 0.07), Vec3::X, Vec3::Z, 0.06, 0.04, GLASS);
+    m.mat(Mat::Paint);
+    // A-frame.
+    for x in [-0.06f32, 0.06] {
+        let (a, b) = (Vec3::new(x, 0.04, -0.1), Vec3::new(0.0, 0.42, 0.0));
+        let d = b - a;
+        m.cuboid((a + b) * 0.5, Vec3::new(0.008, 0.008, d.length() * 0.5), basis_from_dir(d), CRANE_YELLOW);
+        let (a, b) = (Vec3::new(x, 0.04, 0.1), Vec3::new(0.0, 0.42, 0.0));
+        let d = b - a;
+        m.cuboid((a + b) * 0.5, Vec3::new(0.008, 0.008, d.length() * 0.5), basis_from_dir(d), CRANE_YELLOW);
+    }
+    // Lattice jib.
+    let len = 2.7;
+    for (x, y) in [(-0.045f32, 0.06f32), (0.045, 0.06), (0.0, 0.16)] {
+        m.aabb(Vec3::new(x - 0.01, y - 0.01, 0.0), Vec3::new(x + 0.01, y + 0.01, len), CRANE_YELLOW);
+    }
+    let mut z = 0.0;
+    while z < len - 0.05 {
+        for (a, b) in [(Vec3::new(-0.045, 0.06, z), Vec3::new(0.0, 0.16, z + 0.1)), (Vec3::new(0.045, 0.06, z), Vec3::new(0.0, 0.16, z + 0.1)), (Vec3::new(-0.045, 0.06, z), Vec3::new(0.045, 0.06, z + 0.1))] {
+            let d = b - a;
+            m.cuboid((a + b) * 0.5, Vec3::new(0.004, 0.004, d.length() * 0.5), basis_from_dir(d), CRANE_YELLOW);
+        }
+        z += 0.1;
+    }
+    // Counter-jib with a concrete counterweight, and pendant cables.
+    m.aabb(Vec3::new(-0.05, 0.05, -0.75), Vec3::new(0.05, 0.08, 0.0), CRANE_YELLOW);
+    m.mat(Mat::Concrete);
+    m.aabb(Vec3::new(-0.09, 0.0, -0.75), Vec3::new(0.09, 0.14, -0.58), Color::srgb(0.75, 0.75, 0.75));
+    m.mat(Mat::Steel);
+    for (a, b) in [(Vec3::new(0.0, 0.42, 0.0), Vec3::new(0.0, 0.16, len * 0.75)), (Vec3::new(0.0, 0.42, 0.0), Vec3::new(0.0, 0.08, -0.7))] {
+        let d = b - a;
+        m.cuboid((a + b) * 0.5, Vec3::new(0.002, 0.002, d.length() * 0.5), basis_from_dir(d), DARK);
+    }
+    m.mat(Mat::Light);
+    m.sphere(Vec3::new(0.0, 0.44, 0.0), 0.015, Color::srgb(1.0, 0.3, 0.2));
+    m
+}
+
+/// The trolley running along the underside of the jib.
+pub fn crane_trolley_mesh() -> Geo {
+    let mut m = Geo::new();
+    m.mat(Mat::Paint);
+    m.aabb(Vec3::new(-0.06, -0.03, -0.05), Vec3::new(0.06, 0.0, 0.05), CRANE_YELLOW);
+    m.mat(Mat::Steel);
+    m.cylinder(Vec3::new(0.0, -0.035, 0.0), 0.02, 0.03, 8, Quat::from_rotation_z(FRAC_PI_2), DARK);
+    m
+}
+
+/// The hook block (origin at the cable attachment point).
+pub fn crane_hook_mesh() -> Geo {
+    let mut m = Geo::new();
+    m.mat(Mat::Paint);
+    m.aabb(Vec3::new(-0.03, -0.06, -0.02), Vec3::new(0.03, 0.0, 0.02), CRANE_YELLOW);
+    m.aabb(Vec3::new(-0.03, -0.045, -0.021), Vec3::new(0.03, -0.035, 0.021), DARK);
+    m.mat(Mat::Steel);
+    m.cuboid(Vec3::new(0.0, -0.08, 0.0), Vec3::new(0.006, 0.02, 0.006), Quat::IDENTITY, DARK);
+    m.cuboid(Vec3::new(0.014, -0.1, 0.0), Vec3::new(0.018, 0.006, 0.006), Quat::IDENTITY, DARK);
+    m.cuboid(Vec3::new(0.028, -0.09, 0.0), Vec3::new(0.006, 0.014, 0.006), Quat::IDENTITY, DARK);
+    m
+}
+
+/// A clamshell grab bucket for scooping rocks.
+pub fn crane_bucket_mesh() -> Geo {
+    let mut m = Geo::new();
+    m.mat(Mat::Paint);
+    m.aabb(Vec3::new(-0.04, -0.05, -0.03), Vec3::new(0.04, 0.0, 0.03), CRANE_YELLOW);
+    for s in [-1.0f32, 1.0] {
+        m.cuboid(Vec3::new(s * 0.045, -0.1, 0.0), Vec3::new(0.008, 0.05, 0.06), Quat::from_rotation_z(s * 0.35), Color::srgb(0.25, 0.25, 0.27));
+        m.cuboid(Vec3::new(s * 0.02, -0.15, 0.0), Vec3::new(0.025, 0.006, 0.06), Quat::IDENTITY, Color::srgb(0.25, 0.25, 0.27));
+    }
+    m
+}
+
+/// What hangs under the hook / in the bucket while carrying.
+pub fn crane_load_mesh(logs: bool) -> Geo {
+    let mut m = Geo::new();
+    if logs {
+        log_pile(&mut m, Vec3::new(0.0, -0.31, 0.0));
+        m.mat(Mat::Steel);
+        for x in [-0.08f32, 0.08] {
+            let (a, b) = (Vec3::new(0.0, -0.1, 0.0), Vec3::new(x, -0.2, 0.0));
+            let d = b - a;
+            m.cuboid((a + b) * 0.5, Vec3::new(0.002, 0.002, d.length() * 0.5), basis_from_dir(d), DARK);
+        }
+    } else {
+        m.mat(Mat::Rock);
+        for (x, z, r) in [(0.0f32, 0.0f32, 0.045f32), (0.03, 0.02, 0.03), (-0.03, -0.01, 0.035)] {
+            m.sphere(Vec3::new(x, -0.12, z), r, Color::srgb(0.85, 0.85, 0.82));
+        }
+    }
+    m
+}
+
+fn water_tower_mesh(m: &mut Geo) {
+    // Timber tank on a steel frame, conical roof, and a spout that swings over the track.
+    m.mat(Mat::Steel);
+    for (x, z) in [(-0.15f32, -0.15f32), (0.15, -0.15), (0.15, 0.15), (-0.15, 0.15)] {
+        m.aabb(Vec3::new(x - 0.015, 0.0, z - 0.015), Vec3::new(x + 0.015, 0.5, z + 0.015), DARK);
+    }
+    for y in [0.15f32, 0.33] {
+        m.aabb(Vec3::new(-0.15, y, -0.155), Vec3::new(0.15, y + 0.012, -0.145), DARK);
+        m.aabb(Vec3::new(-0.15, y, 0.145), Vec3::new(0.15, y + 0.012, 0.155), DARK);
+    }
+    m.mat(Mat::Planks);
+    m.cylinder(Vec3::new(0.0, 0.66, 0.0), 0.22, 0.16, 16, Quat::IDENTITY, Color::srgb(0.65, 0.5, 0.38));
+    m.mat(Mat::Steel);
+    for y in [0.56f32, 0.7, 0.8] {
+        m.cylinder(Vec3::new(0.0, y, 0.0), 0.224, 0.006, 16, Quat::IDENTITY, DARK);
+    }
+    m.mat(Mat::RoofSlate);
+    m.cone(Vec3::new(0.0, 0.82, 0.0), 0.25, 0.14, 16, TEX);
+    m.mat(Mat::Steel);
+    m.cylinder(Vec3::new(0.24, 0.52, 0.0), 0.025, 0.08, 8, Quat::IDENTITY, DARK);
+    m.cuboid(Vec3::new(0.36, 0.48, 0.0), Vec3::new(0.12, 0.018, 0.018), Quat::from_rotation_z(-0.3), DARK);
+    m.mat(Mat::Plain);
+    m.cylinder(Vec3::new(0.48, 0.42, 0.0), 0.012, 0.03, 6, Quat::IDENTITY, Color::srgb(0.2, 0.2, 0.2));
+    m.mat(Mat::Paint);
+    m.aabb(Vec3::new(-0.08, 0.6, 0.22), Vec3::new(0.08, 0.68, 0.225), Color::srgb(0.15, 0.3, 0.65));
+}
+
+fn fuel_depot_mesh(m: &mut Geo) {
+    // Two tanks on cradles, a pump stand with hose, and a sign.
+    m.mat(Mat::Concrete);
+    m.aabb(Vec3::new(-0.45, 0.0, -0.4), Vec3::new(0.45, 0.03, 0.2), Color::srgb(0.75, 0.75, 0.75));
+    for z in [-0.25f32, 0.05] {
+        m.mat(Mat::Concrete);
+        for x in [-0.25f32, 0.25] {
+            m.aabb(Vec3::new(x - 0.04, 0.03, z - 0.1), Vec3::new(x + 0.04, 0.1, z + 0.1), Color::srgb(0.7, 0.7, 0.7));
+        }
+        m.mat(Mat::Paint);
+        m.cylinder(Vec3::new(0.0, 0.2, z), 0.11, 0.36, 16, Quat::from_rotation_z(FRAC_PI_2), WHITE);
+        m.aabb(Vec3::new(-0.36, 0.2, z - 0.112), Vec3::new(0.36, 0.23, z + 0.112), Color::srgb(0.85, 0.1, 0.1));
+    }
+    m.mat(Mat::Steel);
+    m.aabb(Vec3::new(0.32, 0.03, 0.25), Vec3::new(0.42, 0.3, 0.32), Color::srgb(0.85, 0.1, 0.1));
+    m.mat(Mat::Plain);
+    m.cuboid(Vec3::new(0.37, 0.16, 0.39), Vec3::new(0.008, 0.008, 0.07), Quat::from_rotation_x(0.6), DARK);
+    sign(m, Vec3::new(0.37, 0.25, 0.32), 0.08, 0.06, Color::srgb(0.95, 0.75, 0.1), 3);
+    m.mat(Mat::Steel);
+    rail_pipe(m, Vec3::new(0.36, 0.2, 0.05), Vec3::new(0.36, 0.05, 0.25));
+}
+
+fn rail_pipe(m: &mut Geo, a: Vec3, b: Vec3) {
+    let d = b - a;
+    m.cuboid((a + b) * 0.5, Vec3::new(0.01, 0.01, d.length() * 0.5), basis_from_dir(d), DARK);
 }

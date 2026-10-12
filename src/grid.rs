@@ -225,6 +225,9 @@ pub enum DecorKind {
     PoliceStation,
     FireStation,
     Hospital,
+    Port,
+    WaterTower,
+    FuelDepot,
 }
 
 impl DecorKind {
@@ -240,6 +243,7 @@ impl DecorKind {
         DecorKind::Windmill,
     ];
     pub const EMERGENCY: [DecorKind; 3] = [DecorKind::PoliceStation, DecorKind::FireStation, DecorKind::Hospital];
+    pub const RAILWAY: [DecorKind; 3] = [DecorKind::Port, DecorKind::WaterTower, DecorKind::FuelDepot];
     pub const NATURE: [DecorKind; 10] = [
         DecorKind::PineTree,
         DecorKind::OakTree,
@@ -276,6 +280,9 @@ impl DecorKind {
             DecorKind::PoliceStation => "Police station",
             DecorKind::FireStation => "Fire station",
             DecorKind::Hospital => "Hospital",
+            DecorKind::Port => "Port with crane",
+            DecorKind::WaterTower => "Water tower",
+            DecorKind::FuelDepot => "Fuel depot",
         }
     }
 }
@@ -411,6 +418,25 @@ impl Grid {
             Some(Content::Track(tr)) => tr.road_edges(),
             _ => vec![],
         }
+    }
+
+    /// The edge of a tile that touches water, if any.
+    pub fn water_edge(&self, t: IVec2) -> Option<u8> {
+        (0..4u8).find(|&e| self.get(t + edge_dir(e)).is_some_and(|n| n.ground == Ground::Water))
+    }
+
+    /// Every tile holding a given decoration.
+    pub fn find_decor(&self, kind: DecorKind) -> Vec<IVec2> {
+        let mut v = vec![];
+        for z in 0..GRID {
+            for x in 0..GRID {
+                let t = IVec2::new(x, z);
+                if matches!(self.get(t).map(|x| x.content), Some(Content::Decor { kind: k, .. }) if k == kind) {
+                    v.push(t);
+                }
+            }
+        }
+        v
     }
 
     pub fn is_tunnel(&self, t: IVec2) -> bool {

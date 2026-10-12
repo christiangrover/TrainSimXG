@@ -23,6 +23,8 @@ pub enum Mat {
     /// Emergency light bars; these flash.
     FlashRed,
     FlashBlue,
+    /// A steam engine's fire, seen through the firebox door.
+    Fire,
     Water,
     Grass,
     Foliage,
@@ -44,7 +46,8 @@ pub enum Mat {
 }
 
 impl Mat {
-    pub const ALL: [Mat; 25] = [
+    pub const ALL: [Mat; 26] = [
+        Mat::Fire,
         Mat::Plain,
         Mat::Paint,
         Mat::Steel,
@@ -194,6 +197,16 @@ impl Geo {
     }
     pub fn quad(&mut self, a: Vec3, b: Vec3, c: Vec3, d: Vec3, color: Color) {
         self.poly(&[a, b, c, d], color);
+    }
+
+    /// A one-sided rectangle facing `normal`: visible from outside, invisible
+    /// from behind (used for windows you look out of from inside a cab).
+    /// `u` is the width direction; the height direction is `normal x u`.
+    pub fn panel(&mut self, center: Vec3, normal: Vec3, u: Vec3, hu: f32, hv: f32, color: Color) {
+        let n = normal.normalize();
+        let u = (u - n * u.dot(n)).normalize() * hu;
+        let v = n.cross(u.normalize()) * hv;
+        self.quad(center - u - v, center + u - v, center + u + v, center - u + v, color);
     }
 
     /// Oriented box centered at `center` with half extents `h`, rotated by `rot`.

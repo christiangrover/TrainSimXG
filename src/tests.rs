@@ -5,7 +5,7 @@ use crate::grid::*;
 use crate::models_vehicle::CarKind;
 use crate::save;
 use crate::track::*;
-use crate::trains::Trains;
+use crate::trains::{CargoKind, Trains};
 use bevy::prelude::*;
 
 fn put(grid: &mut Grid, x: i32, z: i32, kind: TrackKind, rot: u8, level: i32) {
@@ -131,4 +131,66 @@ fn demo_trains_are_all_on_valid_track() {
         let mut p = t.cars[0].pos;
         let m = p.advance(&g, 500.0); assert!((m - 500.0).abs() < 1e-2, "{} hit the end of the line at {:?} (track {:?})", t.name, p, g.track(p.tile));
     }
+}
+
+fn test_train(kinds: &[CarKind]) -> (Grid, Trains, u32) {
+    let g = small_loop();
+    let mut trains = Trains::default();
+    let id = trains.spawn(&g, IVec2::new(12, 10), kinds).unwrap();
+    (g, trains, id)
+}
+
+#[test]
+fn steam_needs_stoking_on_manual_fuel() {
+    let (_, mut trains, id) = test_train(&[CarKind::SteamEngine, CarKind::Tender]);
+    let t = trains.get_mut(id).unwrap();
+    t.manual = true;
+    t.fuel_manual = true;
+    t.throttle = 1.0;
+    assert!(t.power() > 0.9);
+    // Run a couple of minutes without shovelling: the fire dies, the steam goes.
+    for _ in 0..(120 * 20) {
+        t.speed = 1.0;
+        crate::trains::burn_for_test(t, 0.05);
+    }
+    assert!(t.power() < 0.3, "pressure should have dropped, power {}", t.power());
+    let coal = t.fuel;
+    for _ in 0..8 {
+        assert!(t.shovel_coal());
+    }
+    assert!(t.fuel < coal, "shovelling uses coal from the tender");
+    for _ in 0..(10 * 20) {
+        crate::trains::burn_for_test(t, 0.05);
+    }
+    assert!(t.power() > 0.5, "stoking brings the steam back, power {}", t.power());
+}
+
+#[test]
+fn diesel_runs_dry_and_auto_fuel_never_does() {
+    let (_, mut trains, id) = test_train(&[CarKind::DieselRoad, CarKind::Boxcar]);
+    let t = trains.get_mut(id).unwrap();
+    t.manual = true;
+    t.throttle = 1.0;
+    for _ in 0..(200 * 20) {
+        crate::trains::burn_for_test(t, 0.05);
+    }
+    assert_eq!(t.power(), 1.0, "auto fuel never runs out");
+    t.fuel_manual = true;
+    for _ in 0..(200 * 20) {
+        crate::trains::burn_for_test(t, 0.05);
+    }
+    assert_eq!(t.fuel, 0.0);
+    assert_eq!(t.power(), 0.0, "an empty tank means no power");
+}
+
+#[test]
+fn cars_only_take_the_right_cargo() {
+    let (_, mut trains, id) = test_train(&[CarKind::LogCar, CarKind::Hopper, CarKind::Tanker]);
+    let t = trains.get_mut(id).unwrap();
+    assert!(!t.cars[0].load(CargoKind::Rocks, 0.5), "no rocks on the log car");
+    assert!(t.cars[0].load(CargoKind::Logs, 0.5));
+    assert!(t.cars[1].load(CargoKind::Rocks, 1.5));
+    assert!(!t.cars[1].load(CargoKind::Rocks, 0.1), "a full hopper takes no more");
+    assert!(t.cars[2].load(CargoKind::Oil, 0.3));
+    assert!(!t.cars[2].load(CargoKind::Water, 0.3), "can't mix water into oil");
 }

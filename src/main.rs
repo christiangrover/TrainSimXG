@@ -4,7 +4,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod build;
+mod cab;
+mod cab_ui;
 mod camera;
+mod crane;
 mod demo;
 mod grid;
 mod materials;
@@ -14,6 +17,8 @@ mod models_vehicle;
 mod roads;
 mod save;
 mod scene;
+mod services;
+mod sounds;
 mod track;
 mod trains;
 mod ui;
@@ -61,6 +66,10 @@ fn main() {
             roads::RoadsPlugin,
             build::BuildPlugin,
             ui::UiPlugin,
+            sounds::SoundsPlugin,
+            services::ServicesPlugin,
+            crane::CranePlugin,
+            cab::CabPlugin,
         ))
         .add_systems(Startup, load_demo)
         .add_systems(Update, materials::flash_lights)
@@ -76,6 +85,7 @@ fn auto_screenshots(
     mut cam: ResMut<camera::CamState>,
     mut trains: ResMut<trains::Trains>,
     vehicles: Query<(&roads::RoadCar, &Transform)>,
+    mut cab_req: ResMut<cab::CabRequests>,
     mut exit: EventWriter<AppExit>,
 ) {
     use bevy::render::view::screenshot::{save_to_disk, Screenshot};
@@ -97,7 +107,11 @@ fn auto_screenshots(
         (CamMode::Follow, None, "follow_diesel", 1),
         (CamMode::Passenger, None, "passenger", 0),
         (CamMode::Engineer, None, "engineer", 1),
+        (CamMode::Fireman, None, "fireman", 0),
         (CamMode::Walk, None, "walk", 0),
+        (CamMode::Overview, Some((IVec2::new(66, 66), 3.5)), "port", 0),
+        (CamMode::Crane, None, "crane", 0),
+        (CamMode::Overview, Some((IVec2::new(66, 65), 2.0)), "loading", 0),
     ];
     let step = 150;
     let i = (*frame / step) as usize;
@@ -125,6 +139,10 @@ fn auto_screenshots(
             cam.focus = tf.translation;
             cam.yaw += 0.004;
         }
+    }
+    // Mid-shovel for the fireman shot.
+    if i < views.len() && views[i].0 == CamMode::Fireman && *frame % step == step - 45 {
+        cab_req.shovel = true;
     }
     if *frame % step == step - 1 && i < views.len() {
         let path = format!("{dir}/{}.png", views[i].2);

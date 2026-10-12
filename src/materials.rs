@@ -130,6 +130,10 @@ pub fn create(images: &mut Assets<Image>, mats: &mut Assets<StandardMaterial>) -
             Mat::Light => sm.emissive = LinearRgba::rgb(6.0, 5.0, 3.0),
             Mat::FlashRed => sm.emissive = LinearRgba::rgb(10.0, 0.3, 0.2),
             Mat::FlashBlue => sm.emissive = LinearRgba::rgb(0.3, 0.8, 12.0),
+            Mat::Fire => {
+                sm.base_color = Color::srgb(0.3, 0.1, 0.0);
+                sm.emissive = LinearRgba::rgb(8.0, 3.0, 0.5);
+            }
             Mat::Water => {
                 sm.perceptual_roughness = 0.06;
                 sm.reflectance = 0.6;

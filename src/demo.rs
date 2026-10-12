@@ -96,12 +96,30 @@ pub fn build_demo(grid: &mut Grid, trains: &mut Trains) {
         }
     }
 
+    // A lake south of the main line, with a port on its shore.
+    for z in 68..75 {
+        for x in 62..74 {
+            let d = ((x as f32 - 67.5) / 6.5).powi(2) + ((z as f32 - 71.5) / 4.0).powi(2);
+            if d < 1.0 {
+                set(&mut tiles, x, z, |t| t.ground = Ground::Water);
+            } else if d < 1.3 {
+                set(&mut tiles, x, z, |t| t.ground = Ground::Sand);
+            }
+        }
+    }
+
     // --- Main line ---------------------------------------------------------
     let (x0, z0, x1, z1) = (25, 30, 75, 65);
     track_loop(&mut tiles, x0, z0, x1, z1, 0);
     // Station on the south side.
     track(&mut tiles, 48, z1, TrackKind::Station, 1, 0);
     track(&mut tiles, 49, z1, TrackKind::Station, 1, 0);
+    // The port's goods station, crane, water tower and fuel depot.
+    track(&mut tiles, 63, z1, TrackKind::Station, 1, 0);
+    track(&mut tiles, 64, z1, TrackKind::Station, 1, 0);
+    set(&mut tiles, 67, 67, |t| t.content = Content::Decor { kind: DecorKind::Port, rot: 0, variant: 0 });
+    set(&mut tiles, 64, z1 - 1, |t| t.content = Content::Decor { kind: DecorKind::WaterTower, rot: 1, variant: 0 });
+    set(&mut tiles, 66, z1 - 1, |t| t.content = Content::Decor { kind: DecorKind::FuelDepot, rot: 0, variant: 0 });
     // Passing siding just north of the main line, joined by two switches.
     track(&mut tiles, 38, z1, TrackKind::SwitchLeft, 1, 0); // stem W, straight E, branch N
     track(&mut tiles, 38, z1 - 1, TrackKind::Curve, 0, 0); // S <-> E

@@ -23,6 +23,12 @@ The game opens with a demo layout. **New… → Yes, clear** gives you an empty 
 
 T cycles through the trains. You can also pick one in the right-hand panel. H sounds the horn (or the whistle on a steam engine) from any train view.
 
+## Stations and passengers
+
+People wait on every platform and stroll about. When a passenger train stops, it pulls up with its coaches along the platform. Some passengers get off and walk into the ticket office, and the people waiting walk to the carriage doors and get on. Self-driving trains wait until everyone is aboard. You can see passengers sitting inside through the coach windows, and the train panel shows how many are on board.
+
+Lay several station pieces in a row for a longer platform; it gets one ticket office in the middle. Passenger trains don't stop at goods stations (stations next to a port).
+
 ## Fuel, coal and water
 
 Each train has a **Fuel: Auto / Manual** switch, in the train panel and on the cab desk.
@@ -49,6 +55,7 @@ Choose a tool in the left toolbox, then left-click on the table. Drag to paint r
 - **Heights:** new track automatically matches the height of the track next to it. A ramp climbs one level toward its arrow. Use *Raise track* and *Lower track* to adjust a placed piece: the straight track on either side turns into ramps by itself, one level per tile, so trains can still get through. Raise the pieces next to it too, or drag the tool along the line, to build a long, flat bridge; a sloping piece levels off instead of making a peak. Curves, switches and stations can't slope, so leave straight track around the piece you raise.
   - Track above the ground is drawn as a **bridge** with piers.
   - Track below the ground is a **tunnel**, with stone portals where it comes out.
+  - **Track over track:** lay straight track across another line to cross it on the level (a diamond crossing). Click the crossing with *Raise track* to lift one line onto a bridge over the other; the approaches slope up by themselves. Click the bridge with *Select* to swap which line goes over. You can also use the *Overpass* piece, or lay a line that's already raised straight across a lower one.
 - **Switches:** click one with the Select tool to flip it. Green means straight, orange means diverging.
 - **Trains:** build a train in the *Train library*, click *Place on track…*, then click on any track. The library has:
   - **Engines:** a steam engine, a diesel road engine and a diesel streamliner. Steam engines puff white smoke; diesels give dark exhaust, heaviest when pulling away.
@@ -71,9 +78,9 @@ The game is a single `.exe` with no installer and nothing else to install. The m
 
 Saved layouts go in a `saves` folder next to the exe. Windows SmartScreen may warn about an unsigned app the first time you run it; click **More info → Run anyway**. The game needs a graphics card with DirectX 12 or Vulkan, which any Windows 11 PC has.
 
-## Textures
+## Textures and lighting
 
-The photo textures (grass, gravel, asphalt, brick, roof tiles, wood and more) are CC0 public-domain textures from [Poly Haven](https://polyhaven.com). They are free to use with no licence fees. See [assets/textures/CREDITS.md](assets/textures/CREDITS.md).
+The photo textures (grass, gravel, asphalt, paving, brick, roof tiles, wood, worn paint and more) come from [ambientCG](https://ambientcg.com) and [Poly Haven](https://polyhaven.com). Each material has colour, bump, roughness and shadowing maps. The scene is lit by a photo of a real sunny living room (an HDRI), which also gives the trains and windows their reflections. Everything is CC0 public domain: free, with no licence fees. See [assets/textures/CREDITS.md](assets/textures/CREDITS.md).
 
 ## Code map
 
@@ -84,6 +91,8 @@ The photo textures (grass, gravel, asphalt, brick, roof tiles, wood and more) ar
 | `trains.rs` | train simulation, fuel, cargo, smoke |
 | `cab.rs`, `cab_ui.rs` | engineer and fireman controls, cab desk, gauges |
 | `crane.rs` | port cranes: controls and automatic loading |
+| `people.rs` | people on platforms, getting on and off trains |
+| `envmap.rs` | room lighting from the HDRI photo |
 | `services.rs` | refuelling, filling and unloading at stops |
 | `sounds.rs` | sound effects, synthesised in code |
 | `roads.rs` | road traffic, emergency vehicles, crossing gates |

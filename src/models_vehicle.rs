@@ -59,6 +59,11 @@ impl CarKind {
         matches!(self, CarKind::SteamEngine | CarKind::DieselEngine | CarKind::DieselRoad)
     }
 
+    /// Coaches that take on and set down passengers at stations.
+    pub fn carries_passengers(self) -> bool {
+        matches!(self, CarKind::Passenger | CarKind::Sleeper | CarKind::Dining)
+    }
+
     pub fn has_seats(self) -> bool {
         matches!(self, CarKind::Passenger | CarKind::Sleeper | CarKind::Dining | CarKind::Caboose)
     }
@@ -166,6 +171,38 @@ fn rail(m: &mut Geo, a: Vec3, b: Vec3, color: Color) {
     m.cuboid((a + b) * 0.5, Vec3::new(0.003, 0.003, d.length() * 0.5), basis_from_dir(d), color);
 }
 
+/// Where people sit in a car (seat-cushion top), for carriages with seats.
+pub fn seat_positions(kind: CarKind) -> Vec<Vec3> {
+    let hl = match kind {
+        CarKind::Passenger | CarKind::Sleeper | CarKind::Dining => 0.4,
+        CarKind::Caboose => 0.22,
+        _ => return vec![],
+    };
+    let mut v = vec![];
+    let mut z = -hl + 0.08;
+    while z < hl - 0.06 {
+        for x in [-0.09f32, 0.09] {
+            v.push(Vec3::new(x, 0.16, z));
+        }
+        z += 0.09;
+    }
+    v
+}
+
+/// A seated passenger, for showing through the windows.
+pub fn seated_person_mesh(variant: usize) -> Geo {
+    let mut m = Geo::new();
+    let shirt = [rgb(0.85, 0.2, 0.2), rgb(0.2, 0.4, 0.85), rgb(0.95, 0.8, 0.25), rgb(0.3, 0.65, 0.35), rgb(0.6, 0.35, 0.7), rgb(0.95, 0.95, 0.95)][variant % 6];
+    let skin = [rgb(0.95, 0.78, 0.62), rgb(0.75, 0.55, 0.4), rgb(0.5, 0.35, 0.25)][variant % 3];
+    let hair = [rgb(0.25, 0.15, 0.08), rgb(0.85, 0.7, 0.35), rgb(0.1, 0.1, 0.1), rgb(0.55, 0.3, 0.15)][variant % 4];
+    m.mat(Mat::Plain);
+    m.aabb(Vec3::new(-0.028, 0.0, -0.02), Vec3::new(0.028, 0.07, 0.018), shirt);
+    m.aabb(Vec3::new(-0.03, 0.0, 0.0), Vec3::new(0.03, 0.02, 0.05), rgb(0.2, 0.22, 0.35));
+    m.sphere(Vec3::new(0.0, 0.095, 0.0), 0.024, skin);
+    m.sphere(Vec3::new(0.0, 0.105, -0.004), 0.023, hair);
+    m
+}
+
 /// Seats seen from the passenger view.
 fn seats(m: &mut Geo, hl: f32, color: Color) {
     m.mat(Mat::Plain);
@@ -199,14 +236,45 @@ fn coach(m: &mut Geo, body: Color, band: Color, windows: u32, wh: f32, extra: im
         let z = -0.27 + i as f32 * 0.18;
         m.cylinder(Vec3::new(0.0, 0.395, z), 0.015, 0.008, 8, Quat::IDENTITY, DARK);
     }
-    // Windows.
+    // See-through windows, so you can see who's on board.
     let span = 2.0 * hl - 0.2;
-    for i in 0..windows {
-        let z = -hl + 0.1 + span * (i as f32 + 0.5) / windows as f32;
-        let hw = span / windows as f32 * 0.36;
+    let hw = span / windows as f32 * 0.36;
+    let zs: Vec<f32> = (0..windows).map(|i| -hl + 0.1 + span * (i as f32 + 0.5) / windows as f32).collect();
+    for &z in &zs {
         for x in [-0.153f32, 0.153] {
-            side_window(m, x, 0.25, z, hw, wh, WHITE);
+            let n = Vec3::X * x.signum();
+            m.mat(Mat::Paint);
+            m.panel(Vec3::new(x, 0.25, z) + n * 0.002, n, Vec3::Z, hw + 0.006, wh + 0.006, WHITE);
+            m.mat(Mat::Window);
+            m.panel(Vec3::new(x, 0.25, z) + n * 0.003, n, Vec3::Z, hw, wh, GLASS);
         }
+    }
+    // Inside walls, ceiling and ends (facing inwards) around the window openings:
+    // a real cabin to look into, while passengers can still see out.
+    let inside = Color::srgb(0.85, 0.78, 0.66);
+    m.mat(Mat::Plain);
+    for s in [-1.0f32, 1.0] {
+        let x = s * 0.147;
+        let n = Vec3::NEG_X * s;
+        let (y0, y1) = (0.25 - wh, 0.25 + wh);
+        m.panel(Vec3::new(x, (0.115 + y0) * 0.5, 0.0), n, Vec3::Z, hl, (y0 - 0.115) * 0.5, inside);
+        m.panel(Vec3::new(x, (y1 + 0.34) * 0.5, 0.0), n, Vec3::Z, hl, (0.34 - y1) * 0.5, inside);
+        let mut edges = vec![-hl];
+        for &z in &zs {
+            edges.push(z - hw);
+            edges.push(z + hw);
+        }
+        edges.push(hl);
+        for pair in edges.chunks(2) {
+            let (a, b) = (pair[0], pair[1]);
+            if b > a {
+                m.panel(Vec3::new(x, 0.25, (a + b) * 0.5), n, Vec3::Z, (b - a) * 0.5, wh, inside);
+            }
+        }
+    }
+    m.panel(Vec3::new(0.0, 0.338, 0.0), Vec3::NEG_Y, Vec3::Z, hl, 0.147, Color::srgb(0.92, 0.9, 0.85));
+    for s in [-1.0f32, 1.0] {
+        m.panel(Vec3::new(0.0, 0.228, s * (hl - 0.002)), Vec3::NEG_Z * s, Vec3::X, 0.147, 0.113, inside);
     }
     // End doors with windows, diaphragms, steps and lamps.
     for s in [-1.0f32, 1.0] {

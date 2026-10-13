@@ -2,6 +2,7 @@
 
 use crate::demo::build_demo;
 use crate::grid::*;
+use crate::track::smooth_levels;
 use crate::models_vehicle::CarKind;
 use crate::save;
 use crate::track::*;
@@ -122,12 +123,18 @@ fn demo_trains_are_all_on_valid_track() {
     let mut g = Grid::default();
     let mut trains = Trains::default();
     build_demo(&mut g, &mut trains);
-    assert_eq!(trains.list.len(), 3);
-    for t in &trains.list {
+    assert_eq!(trains.list.len(), 4);
+    for (i, t) in trains.list.iter().enumerate() {
         for c in &t.cars {
             assert!(c.pos.valid(&g), "{} has a car off the rails", t.name);
         }
-        // Every demo line is a closed loop: a long run never hits a dead end.
+        if i == 3 {
+            // The shuttle runs out and back, over the main line on an overpass.
+            let mut p = t.cars[0].pos;
+            assert!(p.advance(&g, 30.0) > 10.0, "the shuttle line is too short or blocked");
+            continue;
+        }
+        // The other demo lines are closed loops: a long run never hits a dead end.
         let mut p = t.cars[0].pos;
         let m = p.advance(&g, 500.0); assert!((m - 500.0).abs() < 1e-2, "{} hit the end of the line at {:?} (track {:?})", t.name, p, g.track(p.tile));
     }
@@ -245,4 +252,69 @@ fn raising_pieces_side_by_side_builds_a_flat_bridge() {
     }
     let mut p = TrackPos { tile: IVec2::new(0, 5), entry: W, exit: E, t: 0.0 };
     assert!((p.advance(&g, 13.5) - 13.5).abs() < 1e-3, "a train gets over the bridge");
+}
+/// A plus-shaped layout: an east-west line along z = 5 and a north-south line
+/// along x = 6, each 13 tiles long, laid with the track tool's own logic.
+fn crossing_lines() -> Grid {
+    let mut g = Grid::default();
+    for x in 0..13 {
+        crate::build::lay_track(&mut g, IVec2::new(x, 5), TrackKind::Straight, 1).unwrap();
+    }
+    for z in 0..13 {
+        crate::build::lay_track(&mut g, IVec2::new(6, z), TrackKind::Straight, 0).unwrap();
+    }
+    g
+}
+
+#[test]
+fn crossing_lines_make_a_diamond_then_raising_makes_an_overpass() {
+    let mut g = crossing_lines();
+    let x = IVec2::new(6, 5);
+    assert_eq!(g.track(x).unwrap().kind, TrackKind::Crossing, "lines at the same height cross on the level");
+    // Raise the crossing: one line goes up on a bridge, with ramps either side.
+    crate::build::raise_piece(g.edit(x).unwrap().track_mut().unwrap(), true);
+    assert!(smooth_levels(&mut g, x).is_empty());
+    let o = *g.track(x).unwrap();
+    assert_eq!(o.kind, TrackKind::Overpass);
+    assert!(o.upper - o.level >= CLEARANCE);
+    // Trains run the full length of both lines: one over the top, one underneath.
+    let mut ew = TrackPos { tile: IVec2::new(0, 5), entry: W, exit: E, t: 0.0 };
+    assert!((ew.advance(&g, 12.5) - 12.5).abs() < 1e-3, "the east-west line is blocked");
+    let mut ns = TrackPos { tile: IVec2::new(6, 0), entry: N, exit: S, t: 0.0 };
+    assert!((ns.advance(&g, 12.5) - 12.5).abs() < 1e-3, "the north-south line is blocked");
+    // They pass the crossing point at different heights.
+    let over = TrackPos { tile: x, entry: W, exit: E, t: 0.5 }.world(&g).0.y;
+    let under = TrackPos { tile: x, entry: N, exit: S, t: 0.5 }.world(&g).0.y;
+    assert!(over - under >= CLEARANCE as f32 * LEVEL_H - 1e-4, "over {over}, under {under}");
+    // Lower it all the way and it's a level crossing again.
+    for _ in 0..3 {
+        crate::build::raise_piece(g.edit(x).unwrap().track_mut().unwrap(), false);
+        smooth_levels(&mut g, x);
+    }
+    assert_eq!(g.track(x).unwrap().kind, TrackKind::Crossing);
+    assert!((0..13).all(|z| g.track(IVec2::new(6, z)).unwrap().max_level() == 0));
+}
+
+#[test]
+fn a_raised_line_laid_across_another_becomes_an_overpass() {
+    let mut g = Grid::default();
+    // A north-south line on the ground...
+    for z in 0..13 {
+        crate::build::lay_track(&mut g, IVec2::new(6, z), TrackKind::Straight, 0).unwrap();
+    }
+    // ...and an east-west bridge line two levels up, laid from both ends towards it.
+    for x in (0..6).chain((7..13).rev()) {
+        crate::build::lay_track(&mut g, IVec2::new(x, 5), TrackKind::Straight, 1).unwrap();
+        if x == 2 || x == 10 {
+            for _ in 0..2 {
+                crate::build::raise_piece(g.edit(IVec2::new(x, 5)).unwrap().track_mut().unwrap(), true);
+                smooth_levels(&mut g, IVec2::new(x, 5));
+            }
+        }
+    }
+    crate::build::lay_track(&mut g, IVec2::new(6, 5), TrackKind::Straight, 1).unwrap();
+    let o = *g.track(IVec2::new(6, 5)).unwrap();
+    assert_eq!(o.kind, TrackKind::Overpass, "got {o:?}");
+    let mut ns = TrackPos { tile: IVec2::new(6, 0), entry: N, exit: S, t: 0.0 };
+    assert!((ns.advance(&g, 12.5) - 12.5).abs() < 1e-3, "the line underneath still runs");
 }

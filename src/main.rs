@@ -9,9 +9,11 @@ mod cab_ui;
 mod camera;
 mod crane;
 mod demo;
+mod envmap;
 mod grid;
 mod materials;
 mod mesh;
+mod people;
 mod models_tile;
 mod models_vehicle;
 mod roads;
@@ -70,6 +72,7 @@ fn main() {
             services::ServicesPlugin,
             crane::CranePlugin,
             cab::CabPlugin,
+            people::PeoplePlugin,
         ))
         .add_systems(Startup, load_demo)
         .add_systems(Update, materials::flash_lights)
@@ -103,6 +106,9 @@ fn auto_screenshots(
         (CamMode::Overview, Some((IVec2::new(45, 63), 9.0)), "station", 0),
         (CamMode::Overview, Some((IVec2::new(45, 50), 7.0)), "town", 0),
         (CamMode::Overview, Some((IVec2::new(13, 76), 8.0)), "bridge", 0),
+        (CamMode::Overview, Some((IVec2::new(31, 30), 2.6)), "overpass", 0),
+        (CamMode::Overview, Some((IVec2::new(48, 65), 1.4)), "platform", 0),
+        (CamMode::Overview, Some((IVec2::new(48, 65), 0.9)), "riders", 0),
         (CamMode::Overview, Some((IVec2::new(45, 48), 1.6)), "signals", 0),
         (CamMode::Overview, Some((IVec2::new(45, 65), 2.2)), "crossing", 0),
         (CamMode::Overview, Some((IVec2::new(37, 48), 2.2)), "police", 0),
@@ -126,6 +132,25 @@ fn auto_screenshots(
     let i = (*frame / step) as usize;
     // Hold the crossing shot until a train is actually coming (up to ~2 minutes).
     *closed_for = if closed.0.is_empty() { 0 } else { *closed_for + 1 };
+    // Hold the platform shot until a passenger train is standing at the station.
+    let at_platform = trains.list.first().is_some_and(|t| t.speed.abs() < 0.05 && t.cars.iter().any(|c| c.kind.has_seats() && (c.pos.tile - IVec2::new(48, 65)).abs().max_element() <= 2));
+    if i < views.len() && views[i].2 == "platform" && *frame % step == step - 2 && !at_platform && *held < 5400 {
+        *held += 1;
+        *frame -= 1;
+    }
+    // The riders shot looks at the first passenger coach of the first train.
+    if i < views.len() && views[i].2 == "riders" {
+        if let Some(c) = trains.list.first().and_then(|t| t.cars.iter().find(|c| c.kind == models_vehicle::CarKind::Passenger)) {
+            cam.focus = trains::car_transform(&grid, c).translation + Vec3::Y * 0.2;
+            cam.pitch = 0.3;
+        }
+    }
+    // Hold the overpass shot until the shuttle is crossing the bridge.
+    let on_bridge = trains.list.get(3).is_some_and(|t| t.cars.iter().any(|c| (c.pos.tile - IVec2::new(31, 30)).abs().max_element() <= 1));
+    if i < views.len() && views[i].2 == "overpass" && *frame % step == step - 2 && !on_bridge && *held < 3600 {
+        *held += 1;
+        *frame -= 1;
+    }
     if i < views.len() && views[i].2 == "crossing" && *frame % step == step - 2 && *closed_for < 90 && *held < 7200 {
         *held += 1;
         *frame -= 1;

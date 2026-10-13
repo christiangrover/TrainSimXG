@@ -18,6 +18,8 @@ pub enum Mat {
     Paint,
     Steel,
     Glass,
+    /// See-through window glass (coach windows, so you can see the passengers).
+    Window,
     /// Warm glowing light (lamps, headlights).
     Light,
     /// Emergency light bars; these flash.
@@ -40,13 +42,17 @@ pub enum Mat {
     RoofClay,
     RoofSlate,
     Concrete,
+    /// Paving stones for pavements and platforms.
+    Paving,
     Planks,
     Stone,
     Corrugated,
 }
 
 impl Mat {
-    pub const ALL: [Mat; 26] = [
+    pub const ALL: [Mat; 28] = [
+        Mat::Window,
+        Mat::Paving,
         Mat::Fire,
         Mat::Plain,
         Mat::Paint,
@@ -92,6 +98,8 @@ impl Mat {
             Mat::RoofClay => 0.35,
             Mat::RoofSlate => 0.4,
             Mat::Concrete => 1.0,
+            Mat::Paving => 0.7,
+            Mat::Paint => 0.6,
             Mat::Planks => 0.5,
             Mat::Stone => 0.5,
             Mat::Corrugated => 0.35,

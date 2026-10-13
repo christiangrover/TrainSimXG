@@ -106,10 +106,13 @@ impl CamState {
     }
 }
 
-fn spawn_camera(mut commands: Commands) {
+fn spawn_camera(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+    // Light and reflections from a photo of a real, sunny living room.
+    let (diffuse_map, specular_map) = crate::envmap::build(&mut images);
     commands.spawn((
         Camera3d::default(),
         Camera { hdr: true, ..default() },
+        EnvironmentMapLight { diffuse_map, specular_map, intensity: 700.0, ..default() },
         Projection::Perspective(PerspectiveProjection { near: 0.01, far: 2000.0, fov: 60f32.to_radians(), ..default() }),
         Tonemapping::TonyMcMapface,
         // Soft contact shadows, glowing lights, and smooth edges.

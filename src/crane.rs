@@ -439,6 +439,21 @@ fn operate_cranes(
             continue;
         }
         // Automatic operation: find a stopped car that needs logs or rocks.
+        // Hold any train with cars in reach that still need loading, so it
+        // doesn't leave between one car and the next.
+        for tr in &trains.list {
+            if tr.speed.abs() > 0.05 {
+                continue;
+            }
+            let needs = tr.cars.iter().any(|car| {
+                let p = car_transform(&grid, car).translation;
+                let d = Vec2::new(p.x - origin.x, p.z - origin.z).length();
+                (MIN_REACH..MAX_REACH - 0.05).contains(&d) && (car.can_take(CargoKind::Logs) || car.can_take(CargoKind::Rocks))
+            });
+            if needs {
+                busy.0.insert(tr.id);
+            }
+        }
         let rate = TRAVEL * dt;
         let lo = min_hook(&grid, &trains, c);
         if let Some((id, _)) = c.target {
@@ -767,6 +782,7 @@ mod tests {
             if logs > 0.99 && rocks > 0.99 && oil > 0.99 {
                 break;
             }
+
         }
         eprintln!("after {:.1} simulated s: logs {logs:.2}, rocks {rocks:.2}, oil {oil:.2}", frames as f32 * 0.02);
         assert!(app.world().resource::<Cranes>().map.len() == 1, "the demo has one port crane");

@@ -86,6 +86,9 @@ pub struct Car {
     pub pos: TrackPos,
     #[serde(default)]
     pub cargo: Cargo,
+    /// People riding in this car.
+    #[serde(default)]
+    pub passengers: u8,
 }
 
 impl Car {
@@ -306,7 +309,9 @@ impl Trains {
                 let d = (kinds[i - 1].length() + k.length()) * 0.5 + GAP;
                 cur = cur.behind(grid, d);
             }
-            cars.push(Car { kind: k, pos: cur, cargo: Cargo::default() });
+            // Coaches start half full.
+            let passengers = if k.carries_passengers() { (seat_positions(k).len() / 2) as u8 } else { 0 };
+            cars.push(Car { kind: k, pos: cur, cargo: Cargo::default(), passengers });
         }
         let id = self.next_id;
         self.next_id += 1;
@@ -346,6 +351,11 @@ impl Trains {
         }
         self.dirty = true;
     }
+}
+
+/// Is this station tile part of a goods yard (a port within a few tiles)?
+fn near_port(grid: &Grid, t: IVec2) -> bool {
+    (-4..=4).any(|dz| (-4..=4).any(|dx| matches!(grid.get(t + IVec2::new(dx, dz)).map(|x| x.content), Some(Content::Decor { kind: DecorKind::Port, .. }))))
 }
 
 /// World transform of a car: centred between two bogies so it follows curves.
@@ -404,10 +414,17 @@ pub fn run_trains(time: Res<Time>, sim: Res<Sim>, grid: Res<Grid>, mut trains: R
 
     // Snapshot of every car position for collision checks.
     let g: &Grid = &grid;
-    let others: Vec<(u32, Vec3)> = trains
+    // (train, car position, the way that train is heading)
+    let others: Vec<(u32, Vec3, Vec3)> = trains
         .list
         .iter()
-        .flat_map(|t| t.cars.iter().map(move |c| (t.id, c.pos.world(g).0)))
+        .flat_map(|t| {
+            let way = if t.manual { t.speed.signum() } else { t.auto_dir };
+            t.cars.iter().map(move |c| {
+                let (p, d) = c.pos.world(g);
+                (t.id, p, d * way)
+            })
+        })
         .collect();
 
     for train in trains.list.iter_mut() {
@@ -432,16 +449,30 @@ pub fn run_trains(time: Res<Time>, sim: Res<Sim>, grid: Res<Grid>, mut trains: R
 
         if !train.manual {
             let lead = if train.auto_dir > 0.0 { train.cars[0].pos } else { train.cars[n - 1].pos.reversed() };
+            // Passenger trains pull up once their last coach is at the platform,
+            // so the coaches line up along it for people to get on; others stop
+            // with the front of the train there.
+            let order: Vec<usize> = if train.auto_dir > 0.0 { (0..n).collect() } else { (0..n).rev().collect() };
+            let stop_ref = order
+                .iter()
+                .rev()
+                .find(|&&i| train.cars[i].kind.carries_passengers())
+                .map(|&i| if train.auto_dir > 0.0 { train.cars[i].pos } else { train.cars[i].pos.reversed() })
+                .unwrap_or(lead);
             // Station stops.
             if train.dwell > 0.0 {
                 train.dwell -= dt;
                 target = 0.0;
                 train.status = "Stopped at station".into();
-            } else if let Some(tr) = grid.track(lead.tile) {
-                if tr.kind == TrackKind::Station && train.last_station != Some(lead.tile) {
-                    if lead.t >= 0.5 {
+            } else if let Some(tr) = grid.track(stop_ref.tile) {
+                // One stop per platform, however many tiles long it is. Passenger
+                // trains don't call at goods stations (the ones beside a port).
+                let fresh = train.last_station.is_none_or(|s| (s - stop_ref.tile).abs().max_element() > 6);
+                let passenger = train.cars.iter().any(|c| c.kind.carries_passengers());
+                if tr.kind == TrackKind::Station && fresh && !(passenger && near_port(&grid, stop_ref.tile)) {
+                    if stop_ref.t >= 0.5 {
                         train.dwell = 4.0;
-                        train.last_station = Some(lead.tile);
+                        train.last_station = Some(stop_ref.tile);
                         train.speed = 0.0;
                         target = 0.0;
                     } else {
@@ -449,21 +480,26 @@ pub fn run_trains(time: Res<Time>, sim: Res<Sim>, grid: Res<Grid>, mut trains: R
                     }
                 }
             }
-            if train.last_station.is_some_and(|s| (s - lead.tile).abs().max_element() > 3) {
+            if train.last_station.is_some_and(|s| (s - stop_ref.tile).abs().max_element() > 8) {
                 train.last_station = None;
             }
             // Don't run into other trains.
             let (lp, ld) = lead.world(&grid);
             let probe = lead.ahead(&grid, 0.9).world(&grid).0;
-            let blocked = others.iter().any(|(id, p)| {
-                *id != train.id && ((*p - lp).dot(ld) > 0.0 && (*p - lp).length() < 1.3 || (*p - probe).length() < 0.5)
-            });
-            if blocked {
+            // (Trains on a different level, like one passing under an overpass, don't count.)
+            let in_way: Vec<Vec3> = others
+                .iter()
+                .filter(|(id, p, _)| *id != train.id && (p.y - lp.y).abs() < 0.3 && ((*p - lp).dot(ld) > 0.0 && (*p - lp).length() < 1.3 || (*p - probe).length() < 0.5))
+                .map(|(_, _, way)| *way)
+                .collect();
+            if !in_way.is_empty() {
                 target = 0.0;
                 train.status = "Waiting for the line to clear".into();
                 train.wait += dt;
-                // Two trains nose to nose would wait forever: back away.
-                if train.wait > 6.0 {
+                // Two trains nose to nose would wait forever: back away. (Behind a
+                // train going the same way, just wait - it'll move on.)
+                let head_on = in_way.iter().any(|w| w.dot(ld) < 0.0);
+                if train.wait > if head_on { 6.0 } else { 90.0 } {
                     train.wait = 0.0;
                     train.auto_dir = -train.auto_dir;
                 }
@@ -526,6 +562,7 @@ pub struct CarMeshes {
     rocks: Parts,
     water: Parts,
     oil: Parts,
+    seated: Vec<Parts>,
 }
 
 impl CarMeshes {
@@ -535,6 +572,7 @@ impl CarMeshes {
             self.rocks = meshes_of(meshes, cargo_rock_mesh());
             self.water = meshes_of(meshes, cargo_band_mesh(rgb(0.2, 0.45, 0.85)));
             self.oil = meshes_of(meshes, cargo_band_mesh(rgb(0.05, 0.05, 0.05)));
+            self.seated = (0..6).map(|v| meshes_of(meshes, seated_person_mesh(v))).collect();
         }
     }
 }
@@ -545,6 +583,8 @@ struct CargoVisual {
     train: u32,
     car: usize,
     part: CargoPart,
+    /// How many seats the car has (for scattering who sits where).
+    seats: usize,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -552,6 +592,8 @@ enum CargoPart {
     Log(usize),
     Rocks,
     Band(CargoKind),
+    /// Someone sitting in seat number n.
+    Seat(usize),
 }
 
 fn sync_car_visuals(
@@ -583,11 +625,20 @@ fn sync_car_visuals(
                         (CargoPart::Band(CargoKind::Water), &cache.water, Transform::IDENTITY),
                         (CargoPart::Band(CargoKind::Oil), &cache.oil, Transform::IDENTITY),
                     ],
+                    k if k.has_seats() => seat_positions(k)
+                        .into_iter()
+                        .enumerate()
+                        .map(|(s, pos)| {
+                            // Sit facing the direction of travel (alternate rows face each other).
+                            let tf = Transform::from_translation(pos).with_rotation(Quat::from_rotation_y(if (s / 2) % 2 == 0 { 0.0 } else { std::f32::consts::PI }));
+                            (CargoPart::Seat(s), &cache.seated[(s * 7 + i) % 6], tf)
+                        })
+                        .collect(),
                     _ => vec![],
                 };
                 for (part, p, tf) in pieces {
                     let child = spawn_parts(&mut commands, &mats, p, tf);
-                    commands.entity(child).insert((CargoVisual { train: t.id, car: i, part }, Visibility::Hidden));
+                    commands.entity(child).insert((CargoVisual { train: t.id, car: i, part, seats: seat_positions(c.kind).len() }, Visibility::Hidden));
                     commands.entity(e).add_child(child);
                 }
             }
@@ -601,6 +652,10 @@ fn sync_car_visuals(
     }
 }
 
+fn seat_count(cv: &CargoVisual) -> usize {
+    cv.seats.max(1)
+}
+
 fn update_cargo_visuals(trains: Res<Trains>, mut q: Query<(&CargoVisual, &mut Visibility, &mut Transform)>) {
     for (cv, mut vis, mut tf) in &mut q {
         let cargo = trains.get(cv.train).and_then(|t| t.cars.get(cv.car)).map(|c| c.cargo).unwrap_or_default();
@@ -611,6 +666,12 @@ fn update_cargo_visuals(trains: Res<Trains>, mut q: Query<(&CargoVisual, &mut Vi
                 cargo.kind == CargoKind::Rocks && cargo.amount > 0.02
             }
             CargoPart::Band(kind) => cargo.kind == kind && cargo.amount > 0.02,
+            CargoPart::Seat(s) => {
+                let riders = trains.get(cv.train).and_then(|t| t.cars.get(cv.car)).map(|c| c.passengers as usize).unwrap_or(0);
+                // Fill seats in a scattered order, as people would.
+                let order = (s * 7 + 3) % seat_count(cv);
+                order < riders
+            }
         };
         let want = if show { Visibility::Inherited } else { Visibility::Hidden };
         if *vis != want {

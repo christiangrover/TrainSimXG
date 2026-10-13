@@ -11,13 +11,17 @@ pub struct ServicesPlugin;
 
 impl Plugin for ServicesPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<CraneBusy>().init_resource::<Depots>().add_systems(Update, (find_depots, services.after(crate::trains::run_trains)).chain());
+        app.init_resource::<CraneBusy>().init_resource::<PeopleBusy>().init_resource::<Depots>().add_systems(Update, (find_depots, services.after(crate::trains::run_trains)).chain());
     }
 }
 
 /// Trains a crane is currently loading (they wait for it).
 #[derive(Resource, Default)]
 pub struct CraneBusy(pub HashSet<u32>);
+
+/// Trains people are getting on or off (they wait for them).
+#[derive(Resource, Default)]
+pub struct PeopleBusy(pub HashSet<u32>);
 
 /// Where the water towers, fuel depots and ports are.
 #[derive(Resource, Default)]
@@ -53,7 +57,7 @@ const REFUEL: f32 = 0.25;
 const FILL: f32 = 0.2;
 const UNLOAD: f32 = 0.2;
 
-fn services(time: Res<Time>, sim: Res<Sim>, grid: Res<Grid>, depots: Res<Depots>, busy: Res<CraneBusy>, mut trains: ResMut<Trains>) {
+fn services(time: Res<Time>, sim: Res<Sim>, grid: Res<Grid>, depots: Res<Depots>, busy: Res<CraneBusy>, people: Res<PeopleBusy>, mut trains: ResMut<Trains>) {
     if !sim.running {
         return;
     }
@@ -114,6 +118,9 @@ fn services(time: Res<Time>, sim: Res<Sim>, grid: Res<Grid>, depots: Res<Depots>
         }
         if busy.0.contains(&train.id) {
             work = Some("The crane is loading cargo".into());
+        }
+        if people.0.contains(&train.id) {
+            work = Some("Passengers getting on and off".into());
         }
         if let Some(w) = work {
             // Self-driving trains wait at the station until the job is done.

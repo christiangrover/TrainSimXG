@@ -69,10 +69,16 @@ pub enum TrackKind {
     Ramp,
     Station,
     LevelCrossing,
+    /// One track passing over another on a bridge.
+    Overpass,
 }
 
+/// How many levels an overpass's upper track must be above the lower one,
+/// so trains fit underneath.
+pub const CLEARANCE: i32 = 2;
+
 impl TrackKind {
-    pub const ALL: [TrackKind; 8] = [
+    pub const ALL: [TrackKind; 9] = [
         TrackKind::Straight,
         TrackKind::Curve,
         TrackKind::SwitchLeft,
@@ -81,6 +87,7 @@ impl TrackKind {
         TrackKind::Ramp,
         TrackKind::Station,
         TrackKind::LevelCrossing,
+        TrackKind::Overpass,
     ];
 
     pub fn label(self) -> &'static str {
@@ -93,6 +100,7 @@ impl TrackKind {
             TrackKind::Ramp => "Ramp (up/down)",
             TrackKind::Station => "Station",
             TrackKind::LevelCrossing => "Road crossing",
+            TrackKind::Overpass => "Overpass (track over track)",
         }
     }
 }
@@ -106,11 +114,15 @@ pub struct Track {
     /// For switches: true = diverging route is set.
     #[serde(default)]
     pub diverge: bool,
+    /// For overpasses: the level of the upper track (running along the
+    /// rotated East-West edges); `level` is the lower one (North-South).
+    #[serde(default)]
+    pub upper: i32,
 }
 
 impl Track {
     pub fn new(kind: TrackKind, rot: u8, level: i32) -> Self {
-        Track { kind, rot: rot % 4, level, diverge: false }
+        Track { kind, rot: rot % 4, level, diverge: false, upper: level + CLEARANCE }
     }
 
     fn r(&self, e: u8) -> u8 {
@@ -126,6 +138,7 @@ impl Track {
             SwitchLeft => vec![self.r(S), self.r(N), self.r(W)],
             SwitchRight => vec![self.r(S), self.r(N), self.r(E)],
             Crossing => vec![N, E, S, W],
+            Overpass => vec![self.r(N), self.r(E), self.r(S), self.r(W)],
         }
     }
 
@@ -138,6 +151,7 @@ impl Track {
             SwitchLeft => vec![(self.r(S), self.r(N)), (self.r(S), self.r(W))],
             SwitchRight => vec![(self.r(S), self.r(N)), (self.r(S), self.r(E))],
             Crossing => vec![(S, N), (W, E)],
+            Overpass => vec![(self.r(S), self.r(N)), (self.r(W), self.r(E))],
         }
     }
 
@@ -147,26 +161,33 @@ impl Track {
 
     /// Height level of the track where it meets edge `e`.
     pub fn edge_level(&self, e: u8) -> i32 {
-        if self.kind == TrackKind::Ramp && e == self.r(N) {
-            self.level + 1
-        } else {
-            self.level
+        match self.kind {
+            TrackKind::Ramp if e == self.r(N) => self.level + 1,
+            TrackKind::Overpass if e == self.r(E) || e == self.r(W) => self.upper,
+            _ => self.level,
         }
     }
 
     pub fn max_level(&self) -> i32 {
-        if self.kind == TrackKind::Ramp {
-            self.level + 1
-        } else {
-            self.level
+        match self.kind {
+            TrackKind::Ramp => self.level + 1,
+            TrackKind::Overpass => self.upper,
+            _ => self.level,
         }
+    }
+
+    /// An overpass: `lower` runs along edges `lower_rot`'s North-South axis.
+    pub fn overpass(lower_rot: u8, lower: i32, upper: i32) -> Self {
+        let mut t = Track::new(TrackKind::Overpass, lower_rot % 2, lower);
+        t.upper = upper.max(lower + CLEARANCE);
+        t
     }
 
     /// Where a train entering through `entry` leaves, given the switch setting.
     pub fn exit_for(&self, entry: u8) -> Option<u8> {
         use TrackKind::*;
         match self.kind {
-            Crossing => Some(opposite(entry)),
+            Crossing | Overpass => Some(opposite(entry)),
             SwitchLeft | SwitchRight => {
                 let stem = self.r(S);
                 let straight = self.r(N);
@@ -418,6 +439,23 @@ impl Grid {
             Some(Content::Track(tr)) => tr.road_edges(),
             _ => vec![],
         }
+    }
+
+    /// The middle tile of the platform a station tile belongs to (where the
+    /// ticket office is).
+    pub fn platform_middle(&self, t: IVec2) -> IVec2 {
+        let Some(tr) = self.track(t).filter(|x| x.kind == TrackKind::Station) else { return t };
+        let axis = edge_dir(tr.edges()[0]);
+        let same = |p: IVec2| self.track(p).is_some_and(|x| x.kind == TrackKind::Station && x.rot == tr.rot && x.level == tr.level);
+        let (mut a, mut b) = (t, t);
+        while same(a - axis) {
+            a -= axis;
+        }
+        while same(b + axis) {
+            b += axis;
+        }
+        let len = (b - a).abs().max_element();
+        a + axis * (len / 2)
     }
 
     /// The edge of a tile that touches water, if any.

@@ -195,6 +195,7 @@ fn ui_system(
                 tool_button(ui, &mut bs, Tool::TrackUp);
                 tool_button(ui, &mut bs, Tool::TrackDown);
                 ui.small("Track above the ground becomes a bridge; track below the ground becomes a tunnel.");
+                ui.small("To cross another line: lay straight track across it. Then click the crossing with Raise track to lift one line over the other (Select swaps which one is on top).");
             });
             egui::CollapsingHeader::new("Roads").default_open(true).show(ui, |ui| {
                 tool_button(ui, &mut bs, Tool::Road);
@@ -303,7 +304,12 @@ fn ui_system(
                             delete = Some(t.id);
                         }
                     });
-                    ui.label(format!("{} cars · {:.1} tiles/s", t.cars.len(), t.speed.abs()));
+                    let riders: u32 = t.cars.iter().map(|c| c.passengers as u32).sum();
+                    if riders > 0 {
+                        ui.label(format!("{} cars · {:.1} tiles/s · {riders} passengers", t.cars.len(), t.speed.abs()));
+                    } else {
+                        ui.label(format!("{} cars · {:.1} tiles/s", t.cars.len(), t.speed.abs()));
+                    }
                     ui.horizontal(|ui| {
                         ui.selectable_value(&mut t.manual, false, "Auto");
                         ui.selectable_value(&mut t.manual, true, "Manual");

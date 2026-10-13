@@ -123,6 +123,49 @@ fn pick_tile(
     }
 }
 
+/// Lays a piece of track, lining its height up with the track around it. A
+/// straight laid across another straight line crosses it: over a bridge if
+/// it's high enough, otherwise on the level.
+pub fn lay_track(grid: &mut Grid, t: IVec2, kind: TrackKind, rot: u8) -> Result<(), &'static str> {
+    let mut piece = place_piece(grid, t, kind, rot);
+    if let (TrackKind::Straight, Some(ex)) = (kind, grid.track(t).copied()) {
+        if ex.kind == TrackKind::Straight && ex.rot % 2 != piece.rot % 2 {
+            piece = match piece.level - ex.level {
+                d if d >= CLEARANCE => Track::overpass(ex.rot, ex.level, piece.level),
+                d if d <= -CLEARANCE => Track::overpass(piece.rot, piece.level, ex.level),
+                0 => Track::new(TrackKind::Crossing, 0, ex.level),
+                _ => return Err("Too close in height to bridge over: one line must be at least 2 levels higher (or the same height for a crossing)."),
+            };
+        }
+    }
+    if let Some(x) = grid.edit(t) {
+        x.content = Content::Track(piece);
+    }
+    // Joining track at two different heights: slope the straight track between.
+    smooth_levels(grid, t);
+    Ok(())
+}
+
+/// A new piece of track, at heights that line up with the track around it.
+pub fn place_piece(grid: &Grid, t: IVec2, kind: TrackKind, rot: u8) -> Track {
+    let mut piece = Track::new(kind, rot, 0);
+    if kind != TrackKind::Overpass {
+        piece.level = auto_level(grid, t, &piece).clamp(0, MAX_LEVEL - 1);
+        return piece;
+    }
+    // An overpass takes its lower level from the track along its lower line,
+    // and its deck from the track along the upper line (at least 2 levels up).
+    let meets = |e: u8| {
+        let n = t + edge_dir(e);
+        grid.track(n).filter(|nt| nt.edges().contains(&opposite(e))).map(|nt| nt.edge_level(opposite(e)))
+    };
+    let lower_edges = [piece.edges()[0], piece.edges()[2]];
+    let upper_edges = [piece.edges()[1], piece.edges()[3]];
+    let lower = lower_edges.iter().find_map(|&e| meets(e)).unwrap_or(grid.height(t)).clamp(0, MAX_LEVEL - 1 - CLEARANCE);
+    let upper = upper_edges.iter().filter_map(|&e| meets(e)).max().unwrap_or(0);
+    Track::overpass(rot, lower, upper.clamp(lower + CLEARANCE, MAX_LEVEL - 1))
+}
+
 /// Track level that lines up with neighbouring track, else the ground.
 fn auto_level(grid: &Grid, t: IVec2, piece: &Track) -> i32 {
     for e in piece.edges() {
@@ -141,7 +184,19 @@ fn auto_level(grid: &Grid, t: IVec2, piece: &Track) -> i32 {
 /// levels off instead, at its high end when raising and its low end when
 /// lowering, so raising pieces side by side builds a flat bridge.
 pub fn raise_piece(x: &mut Track, up: bool) {
-    if x.kind == TrackKind::Ramp {
+    if x.kind == TrackKind::Crossing && up {
+        // Lift one line of a diamond crossing onto a bridge.
+        *x = Track::overpass(0, x.level, x.level + CLEARANCE);
+    } else if x.kind == TrackKind::Overpass {
+        if up {
+            x.upper = (x.upper + 1).min(MAX_LEVEL - 1);
+        } else if x.upper > x.level + CLEARANCE {
+            x.upper -= 1;
+        } else {
+            // All the way down: the two lines cross on the level again.
+            *x = Track::new(TrackKind::Crossing, 0, x.level);
+        }
+    } else if x.kind == TrackKind::Ramp {
         let level = if up { x.level + 1 } else { x.level };
         *x = Track::new(TrackKind::Straight, x.rot % 2, level);
     } else if up {
@@ -224,6 +279,14 @@ fn use_tool(
     match tool {
         Tool::Select => {
             if let Some(tr) = grid.track(t).copied() {
+                if tr.kind == TrackKind::Overpass {
+                    // Swap which line goes over the top.
+                    if let Some(x) = grid.edit(t).and_then(|x| x.track_mut()) {
+                        x.rot = (x.rot + 1) % 2;
+                    }
+                    smooth_levels(&mut grid, t);
+                    return;
+                }
                 if tr.is_switch() {
                     if let Some(x) = grid.edit(t).and_then(|x| x.track_mut()) {
                         x.diverge = !x.diverge;
@@ -252,15 +315,12 @@ fn use_tool(
             if tile.ground == Ground::Water && tile.track().is_none() {
                 // Building over water is fine: it becomes a bridge.
             }
-            let mut piece = Track::new(kind, bs.rot, 0);
-            piece.level = auto_level(&grid, t, &piece).clamp(0, MAX_LEVEL - 1);
-            if let Some(x) = grid.edit(t) {
-                x.content = Content::Track(piece);
+            if let Err(msg) = lay_track(&mut grid, t, kind, bs.rot) {
+                if pressed {
+                    toast.show(msg);
+                }
             }
-            // Joining track at two different heights: slope the straight track between.
-            smooth_levels(&mut grid, t);
-        }
-        Tool::Road => {
+        }        Tool::Road => {
             if grid.get(t).map(|x| x.ground == Ground::Water).unwrap_or(true) {
                 toast.show("Roads can't go on water - use a road crossing on a bridge instead.");
                 return;
@@ -364,8 +424,7 @@ fn draw_preview(mut gizmos: Gizmos, bs: Res<BuildState>, grid: Res<Grid>) {
     }
     // Show the rails of the piece about to be placed.
     if let Tool::Track(kind) = bs.tool {
-        let mut piece = Track::new(kind, bs.rot, 0);
-        piece.level = auto_level(&grid, t, &piece);
+        let piece = place_piece(&grid, t, kind, bs.rot);
         for (a, b) in piece.paths() {
             let ya = piece.edge_level(a) as f32 * LEVEL_H + 0.1;
             let yb = piece.edge_level(b) as f32 * LEVEL_H + 0.1;

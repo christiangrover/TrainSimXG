@@ -1,5 +1,5 @@
 //! Materials for every [`Mat`], including photo textures embedded in the
-//! executable (CC0, from Poly Haven - see assets/textures/CREDITS.md).
+//! executable (CC0, from ambientCG and Poly Haven - see assets/textures/CREDITS.md).
 
 use crate::mesh::{Geo, Mat};
 use bevy::asset::RenderAssetUsages;
@@ -33,52 +33,93 @@ impl Materials {
     }
 }
 
-macro_rules! tex {
-    ($name:literal) => {
-        (
-            include_bytes!(concat!("../assets/textures/", $name, "_diff.jpg")).as_slice(),
-            include_bytes!(concat!("../assets/textures/", $name, "_nor.jpg")).as_slice(),
-        )
+/// One material's texture maps (JPEG bytes embedded in the executable).
+struct TexSet {
+    color: &'static [u8],
+    normal: &'static [u8],
+    roughness: Option<&'static [u8]>,
+    occlusion: Option<&'static [u8]>,
+}
+
+/// An ambientCG material with colour, normal, roughness and (optionally) occlusion maps.
+macro_rules! acg {
+    ($id:literal) => {
+        TexSet {
+            color: include_bytes!(concat!("../assets/textures/acg/", $id, "_Color.jpg")),
+            normal: include_bytes!(concat!("../assets/textures/acg/", $id, "_NormalGL.jpg")),
+            roughness: Some(include_bytes!(concat!("../assets/textures/acg/", $id, "_Roughness.jpg"))),
+            occlusion: Some(include_bytes!(concat!("../assets/textures/acg/", $id, "_AmbientOcclusion.jpg"))),
+        }
+    };
+    ($id:literal, no_ao) => {
+        TexSet {
+            color: include_bytes!(concat!("../assets/textures/acg/", $id, "_Color.jpg")),
+            normal: include_bytes!(concat!("../assets/textures/acg/", $id, "_NormalGL.jpg")),
+            roughness: Some(include_bytes!(concat!("../assets/textures/acg/", $id, "_Roughness.jpg"))),
+            occlusion: None,
+        }
     };
 }
 
-fn texture_files(m: Mat) -> Option<(&'static [u8], &'static [u8])> {
+/// A Poly Haven material (colour and normal maps).
+macro_rules! ph {
+    ($name:literal) => {
+        TexSet {
+            color: include_bytes!(concat!("../assets/textures/", $name, "_diff.jpg")),
+            normal: include_bytes!(concat!("../assets/textures/", $name, "_nor.jpg")),
+            roughness: None,
+            occlusion: None,
+        }
+    };
+}
+
+fn texture_files(m: Mat) -> Option<TexSet> {
     Some(match m {
-        Mat::Grass | Mat::Foliage => tex!("leafy_grass"),
-        Mat::Earth => tex!("brown_mud_rocks_01"),
-        Mat::Rock => tex!("rocky_terrain_02"),
-        Mat::Sand => tex!("coast_sand_01"),
-        Mat::Ballast => tex!("gravel"),
-        Mat::Asphalt => tex!("asphalt_02"),
-        Mat::TableWood => tex!("fine_grained_wood"),
-        Mat::Floor => tex!("old_wood_floor"),
-        Mat::Brick => tex!("red_brick"),
-        Mat::Plaster => tex!("painted_plaster_wall"),
-        Mat::RoofClay => tex!("clay_roof_tiles"),
-        Mat::RoofSlate => tex!("grey_roof_tiles"),
-        Mat::Concrete => tex!("concrete"),
-        Mat::Planks => tex!("brown_planks_03"),
-        Mat::Stone => tex!("old_stone_wall"),
-        Mat::Corrugated => tex!("corrugated_iron"),
+        Mat::Grass => acg!("Grass001"),
+        Mat::Foliage => acg!("Grass001"),
+        Mat::Earth => ph!("brown_mud_rocks_01"),
+        Mat::Rock => acg!("Rock064"),
+        Mat::Sand => acg!("Ground054"),
+        Mat::Ballast => acg!("Gravel023"),
+        Mat::Asphalt => acg!("Asphalt033"),
+        Mat::TableWood => ph!("fine_grained_wood"),
+        Mat::Floor => acg!("WoodFloor051"),
+        Mat::Brick => acg!("Bricks097"),
+        Mat::Plaster => acg!("PaintedPlaster017", no_ao),
+        Mat::RoofClay => acg!("RoofingTiles006"),
+        Mat::RoofSlate => acg!("RoofingTiles013A"),
+        Mat::Concrete => acg!("Concrete034", no_ao),
+        Mat::Paving => acg!("PavingStones138"),
+        Mat::Planks => acg!("Planks037A"),
+        Mat::Stone => acg!("Bricks075A"),
+        Mat::Corrugated => acg!("CorrugatedSteel005"),
+        Mat::Paint => acg!("PaintedMetal004", no_ao),
         _ => return None,
     })
 }
 
+/// How a colour texture is adjusted on load.
+#[derive(Clone, Copy, PartialEq)]
+enum Tint {
+    None,
+    /// Grey it out and brighten it, so vertex colours (each train's paint
+    /// colour) show through with the texture's wear and chips on top.
+    Neutral,
+}
 /// Decodes a JPEG into an RGBA texture with a full mip chain (Bevy doesn't
 /// generate mipmaps itself, and without them distant tiling textures shimmer).
-fn load_texture(bytes: &[u8], srgb: bool, green: bool) -> Image {
+fn load_texture(bytes: &[u8], srgb: bool, tint: Tint) -> Image {
     let mut rgba = image::load_from_memory_with_format(bytes, image::ImageFormat::Jpeg).expect("embedded texture is a valid JPEG").to_rgba8();
-    if green {
-        // The photo is an autumn lawn full of brown leaves: keep its detail
-        // (brightness) but map it onto fresh greens.
+    if tint == Tint::Neutral {
+        let lum = |p: &image::Rgba<u8>| 0.3 * p.0[0] as f32 + 0.59 * p.0[1] as f32 + 0.11 * p.0[2] as f32;
+        let mean = rgba.pixels().map(lum).sum::<f32>() / (rgba.width() * rgba.height()) as f32;
         for px in rgba.pixels_mut() {
-            let [r, g, b, _] = px.0.map(|v| v as f32);
-            let l = ((0.3 * r + 0.59 * g + 0.11 * b - 50.0) / 140.0).clamp(0.0, 1.0);
-            let (dark, light) = ([38.0, 78.0, 28.0], [150.0, 196.0, 86.0]);
-            for c in 0..3 {
-                let mapped = dark[c] + (light[c] - dark[c]) * l;
-                px.0[c] = (mapped * 0.88 + [r, g, b][c] * 0.12).min(255.0) as u8;
-            }
+            // Keep only a hint of the wear, so the train's own paint colour shows.
+            let rel = (lum(px) / mean.max(1.0)).clamp(0.6, 1.4);
+            let l = (235.0 * (1.0 + 0.18 * (rel - 1.0))).min(255.0) as u8;
+            px.0[0] = l;
+            px.0[1] = l;
+            px.0[2] = l;
         }
     }
     let (w0, h0) = rgba.dimensions();
@@ -141,6 +182,12 @@ pub fn create(images: &mut Assets<Image>, mats: &mut Assets<StandardMaterial>) -
                 sm.metallic = 0.3;
                 sm.reflectance = 0.8;
             }
+            Mat::Window => {
+                sm.base_color = Color::srgba(0.55, 0.65, 0.7, 0.18);
+                sm.alpha_mode = AlphaMode::Blend;
+                sm.perceptual_roughness = 0.1;
+                sm.reflectance = 0.25;
+            }
             Mat::Light => sm.emissive = LinearRgba::rgb(6.0, 5.0, 3.0),
             Mat::FlashRed => sm.emissive = LinearRgba::rgb(10.0, 0.3, 0.2),
             Mat::FlashBlue => sm.emissive = LinearRgba::rgb(0.3, 0.8, 12.0),
@@ -157,10 +204,19 @@ pub fn create(images: &mut Assets<Image>, mats: &mut Assets<StandardMaterial>) -
             Mat::RoofSlate => sm.perceptual_roughness = 0.6,
             _ => {}
         }
-        if let Some((diff, nor)) = texture_files(m) {
-            let green = matches!(m, Mat::Grass | Mat::Foliage);
-            sm.base_color_texture = Some(images.add(load_texture(diff, true, green)));
-            sm.normal_map_texture = Some(images.add(load_texture(nor, false, false)));
+        if let Some(t) = texture_files(m) {
+            let tint = if m == Mat::Paint { Tint::Neutral } else { Tint::None };
+            sm.base_color_texture = Some(images.add(load_texture(t.color, true, tint)));
+            sm.normal_map_texture = Some(images.add(load_texture(t.normal, false, Tint::None)));
+            if let Some(r) = t.roughness {
+                // Roughness is read from the green channel (and metalness from blue,
+                // scaled by `metallic`); a grey map serves for both.
+                sm.metallic_roughness_texture = Some(images.add(load_texture(r, false, Tint::None)));
+                sm.perceptual_roughness = 1.0;
+            }
+            if let Some(o) = t.occlusion {
+                sm.occlusion_texture = Some(images.add(load_texture(o, false, Tint::None)));
+            }
         }
         if m == Mat::Earth || m == Mat::Rock || m == Mat::Grass {
             // Terrain is seen from inside tunnels too.

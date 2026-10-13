@@ -112,8 +112,9 @@ pub fn build_demo(grid: &mut Grid, trains: &mut Trains) {
     let (x0, z0, x1, z1) = (25, 30, 75, 65);
     track_loop(&mut tiles, x0, z0, x1, z1, 0);
     // Station on the south side.
-    track(&mut tiles, 48, z1, TrackKind::Station, 1, 0);
-    track(&mut tiles, 49, z1, TrackKind::Station, 1, 0);
+    for x in 46..=50 {
+        track(&mut tiles, x, z1, TrackKind::Station, 1, 0);
+    }
     // The port's goods station, crane, water tower and fuel depot.
     track(&mut tiles, 63, z1, TrackKind::Station, 1, 0);
     track(&mut tiles, 64, z1, TrackKind::Station, 1, 0);
@@ -225,11 +226,23 @@ pub fn build_demo(grid: &mut Grid, trains: &mut Trains) {
 
     grid.replace_all(tiles);
 
+    // A shuttle line that crosses over the main line on an overpass.
+    for z in 20..38 {
+        let _ = crate::build::lay_track(grid, IVec2::new(31, z), TrackKind::Straight, 0);
+    }
+    let over = IVec2::new(31, z0);
+    if let Some(x) = grid.edit(over).and_then(|x| x.track_mut()) {
+        crate::build::raise_piece(x, true);
+        x.rot = 1; // the shuttle goes over the top
+    }
+    crate::track::smooth_levels(grid, over);
+
     trains.list.clear();
     trains.next_id = 0;
     // Both main-line trains run clockwise so they follow each other round.
     let _ = trains.spawn_heading(grid, IVec2::new(45, z0), &[CarKind::SteamEngine, CarKind::Tender, CarKind::Passenger, CarKind::Dining, CarKind::Sleeper, CarKind::Caboose], Some(E));
     let _ = trains.spawn_heading(grid, IVec2::new(x1, 52), &[CarKind::DieselRoad, CarKind::Boxcar, CarKind::Tanker, CarKind::Hopper, CarKind::LogCar, CarKind::Caboose], Some(S));
     let _ = trains.spawn(grid, IVec2::new(4, 62), &[CarKind::SteamEngine, CarKind::Tender, CarKind::Passenger, CarKind::Passenger]);
+    let _ = trains.spawn_heading(grid, IVec2::new(31, 22), &[CarKind::DieselEngine, CarKind::Passenger, CarKind::Caboose], Some(S));
     trains.selected = trains.list.first().map(|t| t.id);
 }

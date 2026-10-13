@@ -102,7 +102,8 @@ fn setup_scene(
     spawn_geo(&mut commands, &mut meshes, &mats, r, Transform::default());
     commands.insert_resource(mats);
 
-    commands.insert_resource(AmbientLight { color: rgb(0.85, 0.9, 1.0), brightness: 350.0, ..default() });
+    // Most fill light now comes from the room photo (see envmap.rs).
+    commands.insert_resource(AmbientLight { color: rgb(0.85, 0.9, 1.0), brightness: 60.0, ..default() });
     commands.insert_resource(ClearColor(rgb(0.55, 0.7, 0.85)));
     // Afternoon sun slanting in through the window.
     commands.spawn((

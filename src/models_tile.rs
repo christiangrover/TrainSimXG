@@ -39,10 +39,12 @@ fn path_points(tr: &Track, a: u8, b: u8, n: usize) -> Vec<(Vec3, Vec3)> {
 
 fn track_mesh(mb: &mut Geo, grid: &Grid, t: IVec2, tr: &Track, height: i32) {
     let terrain_y = height as f32 * LEVEL_H;
-    let elevated = tr.max_level() > height;
     let n = 8;
     for (pi, &(a, b)) in tr.paths().iter().enumerate() {
         let pts = path_points(tr, a, b, n);
+        // Each path is a bridge if it's above the ground (an overpass has one of each).
+        let elevated = tr.edge_level(a).max(tr.edge_level(b)) > height;
+        let overpass_deck = tr.kind == TrackKind::Overpass && pi == 1;
         // On a switch, the route that is set has polished rails.
         let active = !tr.is_switch() || (pi == 1) == tr.diverge;
         let rail = if active { Color::srgb(0.85, 0.82, 0.8) } else { Color::srgb(0.5, 0.4, 0.33) };
@@ -76,22 +78,28 @@ fn track_mesh(mb: &mut Geo, grid: &Grid, t: IVec2, tr: &Track, height: i32) {
                 mb.mat(Mat::Planks);
                 mb.cuboid(mid - Vec3::Y * 0.015, Vec3::new(0.25, 0.015, len * 0.5 + 0.01), q, Color::srgb(0.6, 0.5, 0.42));
                 mb.mat(Mat::Paint);
+                // An overpass deck keeps its girders above, leaving room for trains below.
+                let girder_y = if overpass_deck { 0.04 } else { -0.02 };
                 for side in [-1.0f32, 1.0] {
                     let off = q * Vec3::X * 0.24 * side;
-                    mb.cuboid(mid + off - Vec3::Y * 0.02, Vec3::new(0.01, 0.06, len * 0.5 + 0.01), q, Color::srgb(0.5, 0.16, 0.12));
+                    mb.cuboid(mid + off + Vec3::Y * girder_y, Vec3::new(0.01, 0.06, len * 0.5 + 0.01), q, Color::srgb(0.5, 0.16, 0.12));
                     mb.cuboid(mid + off + Vec3::Y * 0.11, Vec3::new(0.006, 0.006, len * 0.5 + 0.01), q, Color::srgb(0.5, 0.16, 0.12));
                     mb.cuboid(mid + off + Vec3::Y * 0.065, Vec3::new(0.005, 0.045, 0.005), q, Color::srgb(0.5, 0.16, 0.12));
                 }
             }
         }
-        if elevated && pi == 0 {
-            let (pm, _) = pts[n / 2];
-            let top = pm.y - 0.08;
+        // Stone piers: one in the middle, or for an overpass deck one at each
+        // end, either side of the track passing underneath.
+        let piers: &[usize] = if overpass_deck { &[0, n] } else if pi == 0 { &[n / 2] } else { &[] };
+        for &k in piers.iter().filter(|_| elevated) {
+            let (pm, d) = pts[k];
+            let pm = if overpass_deck { pm - d.with_y(0.0).normalize() * 0.08 * if k == 0 { -1.0 } else { 1.0 } } else { pm };
+            let top = pm.y - 0.04;
             if top > terrain_y {
                 let h = (top - terrain_y) * 0.5;
                 mb.mat(Mat::Stone);
-                mb.cuboid(Vec3::new(pm.x, terrain_y + h, pm.z), Vec3::new(0.1, h, 0.1), Quat::IDENTITY, TEX);
-                mb.cuboid(Vec3::new(pm.x, top - 0.02, pm.z), Vec3::new(0.24, 0.03, 0.12), basis_from_dir(pts[n / 2].1.with_y(0.0)), TEX);
+                mb.cuboid(Vec3::new(pm.x, terrain_y + h, pm.z), Vec3::new(0.09, h, 0.09), basis_from_dir(d.with_y(0.0)), TEX);
+                mb.cuboid(Vec3::new(pm.x, top - 0.02, pm.z), Vec3::new(0.24, 0.03, 0.1), basis_from_dir(d.with_y(0.0)), TEX);
             }
         }
     }
@@ -113,7 +121,7 @@ fn track_mesh(mb: &mut Geo, grid: &Grid, t: IVec2, tr: &Track, height: i32) {
             mb.append(s, Transform::from_xyz(0.0, y0, 0.0).with_rotation(rq));
         }
         TrackKind::Station => {
-            mb.append(station_mesh(), Transform::from_xyz(0.0, y0, 0.0).with_rotation(rq));
+            mb.append(station_mesh(grid.platform_middle(t) == t), Transform::from_xyz(0.0, y0, 0.0).with_rotation(rq));
         }
         TrackKind::LevelCrossing => {
             let mut s = Geo::new();
@@ -164,22 +172,24 @@ fn track_mesh(mb: &mut Geo, grid: &Grid, t: IVec2, tr: &Track, height: i32) {
     }
 }
 
-fn station_mesh() -> Geo {
+fn station_mesh(office: bool) -> Geo {
     let mut s = Geo::new();
     // Platform on the +X side with a yellow safety line.
-    s.mat(Mat::Concrete);
+    s.mat(Mat::Paving);
     s.aabb(Vec3::new(0.2, 0.0, -0.5), Vec3::new(0.5, 0.12, 0.5), Color::srgb(0.85, 0.83, 0.8));
     s.mat(Mat::Paint);
     s.aabb(Vec3::new(0.2, 0.12, -0.5), Vec3::new(0.225, 0.123, 0.5), Color::srgb(0.95, 0.8, 0.1));
-    // Brick ticket office with a slate roof.
-    s.mat(Mat::Brick);
-    s.aabb(Vec3::new(0.36, 0.12, -0.22), Vec3::new(0.5, 0.38, 0.22), TEX);
-    s.mat(Mat::RoofSlate);
-    s.roof(Vec3::new(0.43, 0.38, 0.0), 0.5, 0.2, 0.1, Quat::from_rotation_y(FRAC_PI_2), TEX, TEX, Mat::Brick);
-    s.mat(Mat::Planks);
-    s.aabb(Vec3::new(0.355, 0.12, -0.04), Vec3::new(0.36, 0.28, 0.04), Color::srgb(0.45, 0.3, 0.2));
-    window(&mut s, Vec3::new(0.36, 0.25, 0.12), Vec3::NEG_X, 0.07, 0.07, TRIM);
-    window(&mut s, Vec3::new(0.36, 0.25, -0.12), Vec3::NEG_X, 0.07, 0.07, TRIM);
+    // One brick ticket office (with a slate roof) per platform, in the middle.
+    if office {
+        s.mat(Mat::Brick);
+        s.aabb(Vec3::new(0.36, 0.12, -0.22), Vec3::new(0.5, 0.38, 0.22), TEX);
+        s.mat(Mat::RoofSlate);
+        s.roof(Vec3::new(0.43, 0.38, 0.0), 0.5, 0.2, 0.1, Quat::from_rotation_y(FRAC_PI_2), TEX, TEX, Mat::Brick);
+        s.mat(Mat::Planks);
+        s.aabb(Vec3::new(0.355, 0.12, -0.04), Vec3::new(0.36, 0.28, 0.04), Color::srgb(0.45, 0.3, 0.2));
+        window(&mut s, Vec3::new(0.36, 0.25, 0.12), Vec3::NEG_X, 0.07, 0.07, TRIM);
+        window(&mut s, Vec3::new(0.36, 0.25, -0.12), Vec3::NEG_X, 0.07, 0.07, TRIM);
+    }
     // Canopy on green iron posts.
     s.mat(Mat::Paint);
     for z in [-0.4f32, 0.0, 0.4] {
@@ -187,11 +197,13 @@ fn station_mesh() -> Geo {
     }
     s.mat(Mat::Corrugated);
     s.cuboid(Vec3::new(0.31, 0.45, 0.0), Vec3::new(0.1, 0.008, 0.49), Quat::from_rotation_z(-0.12), Color::srgb(0.55, 0.7, 0.6));
-    // Station sign, clock, bench and lamps.
-    s.mat(Mat::Paint);
-    s.aabb(Vec3::new(0.29, 0.33, 0.15), Vec3::new(0.3, 0.38, 0.33), Color::srgb(0.1, 0.2, 0.6));
-    s.aabb(Vec3::new(0.288, 0.345, 0.17), Vec3::new(0.29, 0.365, 0.31), WHITE);
-    s.cylinder(Vec3::new(0.295, 0.39, -0.2), 0.025, 0.004, 12, Quat::from_rotation_z(FRAC_PI_2), WHITE);
+    // Station sign and clock by the office; benches and lamps all along.
+    if office {
+        s.mat(Mat::Paint);
+        s.aabb(Vec3::new(0.29, 0.33, 0.15), Vec3::new(0.3, 0.38, 0.33), Color::srgb(0.1, 0.2, 0.6));
+        s.aabb(Vec3::new(0.288, 0.345, 0.17), Vec3::new(0.29, 0.365, 0.31), WHITE);
+        s.cylinder(Vec3::new(0.295, 0.39, -0.2), 0.025, 0.004, 12, Quat::from_rotation_z(FRAC_PI_2), WHITE);
+    }
     s.mat(Mat::Planks);
     s.aabb(Vec3::new(0.25, 0.16, -0.32), Vec3::new(0.3, 0.17, -0.12), Color::srgb(0.6, 0.45, 0.3));
     s.aabb(Vec3::new(0.295, 0.17, -0.32), Vec3::new(0.3, 0.21, -0.12), Color::srgb(0.6, 0.45, 0.3));
@@ -202,8 +214,8 @@ fn station_mesh() -> Geo {
 }
 
 fn road_mesh(mb: &mut Geo, edges: &[u8], y: f32) {
-    // Concrete pavement over the whole tile, asphalt road on top.
-    mb.mat(Mat::Concrete);
+    // Paved pavement over the whole tile, asphalt road on top.
+    mb.mat(Mat::Paving);
     mb.aabb(Vec3::new(-0.5, y, -0.5), Vec3::new(0.5, y + 0.014, 0.5), Color::srgb(0.85, 0.84, 0.82));
     mb.mat(Mat::Asphalt);
     let h = 0.02;
